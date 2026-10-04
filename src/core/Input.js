@@ -30,6 +30,7 @@ export class Input {
     this.buttons = 0;
     this.buttonPressed = 0;
     this.locked = false;
+    this.fallback = false;
     // 자동 시험용(?testinput): 포인터 잠금 없이 마우스 입력 허용
     this.forceLocked = new URLSearchParams(location.search).has('testinput');
     if (this.forceLocked) this.locked = true;
@@ -37,6 +38,10 @@ export class Input {
     this._onKeyDown = (e) => {
       if (e.code === 'F3' || e.code === 'Tab' || (this.locked && e.code === 'Space')) e.preventDefault();
       if (e.repeat) return;
+      if (this.fallback && this.locked && e.code === 'Escape') {
+        this._setFallbackLock(false);
+        return;
+      }
       if (e.code === 'ShiftRight') this._press('ShiftLeft');
       this._press(e.code);
     };
@@ -79,6 +84,7 @@ export class Input {
     window.addEventListener('blur', this._onBlur);
     window.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', this._onLock);
+    document.addEventListener('pointerlockerror', () => this._lockFailed());
   }
 
   _press(code) {
@@ -96,8 +102,41 @@ export class Input {
   }
 
   requestLock() {
-    const p = this.el.requestPointerLock?.({ unadjustedMovement: true });
-    if (p && p.catch) p.catch(() => this.el.requestPointerLock?.());
+    if (this.fallback) {
+      this._setFallbackLock(true);
+      return;
+    }
+    try {
+      if (!this.el.requestPointerLock) return this._lockFailed();
+      const p = this.el.requestPointerLock({ unadjustedMovement: true });
+      if (p && p.catch)
+        p.catch(() => {
+          try {
+            const q = this.el.requestPointerLock();
+            if (q && q.catch) q.catch(() => this._lockFailed());
+          } catch {
+            this._lockFailed();
+          }
+        });
+    } catch {
+      this._lockFailed();
+    }
+  }
+
+  // 포인터 잠금이 막힌 환경(공유 페이지 틀 등): 커서가 보이는 채로 마우스 이동량을 그대로 시점에 쓴다.
+  _lockFailed() {
+    if (document.pointerLockElement === this.el) return;
+    this.fallback = true;
+    this._setFallbackLock(true);
+  }
+  _setFallbackLock(on) {
+    if (this.locked === on) return;
+    this.locked = on;
+    if (!on) {
+      this.down.clear();
+      this.buttons = 0;
+    }
+    this.onLockChange?.(on);
   }
 
   held(code) {
