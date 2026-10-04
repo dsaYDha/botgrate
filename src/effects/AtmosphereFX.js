@@ -74,8 +74,9 @@ void main() {
   gl_Position = projectionMatrix * mv;
   // 실제 크기(갓털 약 1.5 cm, 먼지 2~3 mm) → 화소, 너무 작으면 1.5 화소로 두고 밝기를 줄임
   float px = aSize * projectionMatrix[1][1] * 0.5 * ${'${H}'} / -mv.z;
-  gl_PointSize = max(px, 1.5);
-  vBright = min(1.0, px / 1.5);
+  gl_PointSize = clamp(px, 1.5, 24.0);
+  // 눈앞 1 m 안을 지나는 것은 초점이 맞지 않아 거의 보이지 않는다 → 흐려지며 사라짐(화면을 가리는 큰 원판 방지)
+  vBright = min(1.0, px / 1.5) * smoothstep(0.4, 1.2, -mv.z);
   vKind = aKind;
 }
 `;
