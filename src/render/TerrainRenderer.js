@@ -101,7 +101,7 @@ vec3 groundShade(vec3 wp, vec3 macroN, out vec3 nW, out float cavity) {
     roadD = terrainHD(p).y;
   } else farFields(p, sa, sb, sc);
   float ard = abs(roadD);
-  float roadW = inMap ? smoothstep(1.85, 1.45, ard) : 0.0;
+  float roadW = inMap ? 1.0 - smoothstep(1.45, 1.85, ard) : 0.0;
   float keep = 1.0 - roadW;
   float wStub = sa.r * keep, wPlow = sa.g * keep, wFal = sa.b * keep, wFor = sa.a * keep;
   float wGrass = sb.r * keep, wSun = sb.g * keep, wet = sb.b;

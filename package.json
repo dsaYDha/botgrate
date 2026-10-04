@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:ballistics": "node tests/ballistics.test.js",
+    "test:consistency": "node tools/consistency.mjs",
     "shots": "node tools/shots.mjs"
   },
   "dependencies": {

@@ -223,7 +223,7 @@ export class TreeRenderer {
     for (let ti = 0; ti < T.length; ti++) {
       const Tt = T[ti];
       const fr = frames[ti];
-      tplInfo[ti].set(fr.w, fr.h, fr.minY, 0);
+      tplInfo[ti].set(fr.w, fr.h, fr.minY, Tt.bbox.maxY);
       const sp = SPECIES_INDEX[Tt.species];
       let flags = FLAG.still;
       if (Tt.kind === 'snag') flags |= FLAG.dead | FLAG.jagged;
@@ -344,6 +344,15 @@ export class TreeRenderer {
     mat.trunkB.dispose();
     const impMat = makeImpostorMaterial(this.shared, baked.key, baked.normal, tplInfo, new THREE.Vector2(grid.cols, grid.rows), { a2c });
     this.imp = new Bucket(scene, impostorGeometry(), impMat, nT + nS);
+    // 원경(지도 밖 숲띠)이 같은 임포스터를 쓴다
+    this.impostorInfo = {
+      key: baked.key,
+      normal: baked.normal,
+      tplInfo,
+      grid: new THREE.Vector2(grid.cols, grid.rows),
+      bySpecies: cat.bySpecies,
+      speciesUniforms: { uAutumnCol: this.shared.uAutumnCol, uBarkAvg: this.shared.uBarkAvg },
+    };
 
     // ---- 쓰러진 나무·뿌리판 ----
     this._buildWood(scene);
@@ -391,15 +400,24 @@ export class TreeRenderer {
 
   _buildWood(scene) {
     const belts = this.world.belts;
-    const tubes = [];
     const terrain = this.world.terrain;
+    // 64 m 칸으로 나눠 메시 여러 개(절두체·거리 컬링): 통나무·뿌리판은 멀리까지, 잔가지는 가까이만
+    const CH = 64;
+    const groups = new Map();
+    const add = (tb, far) => {
+      const p = tb.pts[0];
+      const key = `${far ? 'F' : 'N'}${Math.floor(p[0] / CH)},${Math.floor(p[2] / CH)}`;
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = { far, tubes: [] }));
+      g.tubes.push(tb);
+    };
     for (const f of belts.fallen || []) {
       const layer = f.material === 'woodDead' ? SPECIES_INDEX.snag : SPECIES_INDEX.elm;
-      tubes.push({ pts: f.pts, layer, moss: f.moss, rand: f.seed, capA: !f.rootPlate, capB: true });
-      for (const s of f.stubs) tubes.push({ pts: [[s.ax, s.ay, s.az, s.r0], [s.bx, s.by, s.bz, s.r1]], layer: SPECIES_INDEX.snag, moss: f.moss * 0.5, rand: f.seed, capB: true, radial: 5 });
+      add({ pts: f.pts, layer, moss: f.moss, rand: f.seed, capA: !f.rootPlate, capB: true }, true);
+      for (const s of f.stubs) add({ pts: [[s.ax, s.ay, s.az, s.r0], [s.bx, s.by, s.bz, s.r1]], layer: SPECIES_INDEX.snag, moss: f.moss * 0.5, rand: f.seed, capB: true, radial: 5 }, true);
       const p = f.rootPlate;
       if (p) {
-        tubes.push({ kind: 'plate', pts: [[p.ax, p.ay, p.az, p.r], [p.bx, p.by, p.bz, p.r]], layer: SPECIES_INDEX.snag, capA: true, capB: true, radial: 16 });
+        add({ kind: 'plate', pts: [[p.ax, p.ay, p.az, p.r], [p.bx, p.by, p.bz, p.r]], layer: SPECIES_INDEX.snag, capA: true, capB: true, radial: 16 }, true);
         // 바깥 면(통나무 반대쪽)에 뻗은 굵은 뿌리: 원판 반지름 안, 면에서 15 cm 이내로만 튀어나옴
         const rng = new Random(Math.floor(p.seed * 1e6) + 7);
         const ux = Math.cos(p.ang);
@@ -420,18 +438,37 @@ export class TreeRenderer {
           const B = [fc[0] + dir[0] * r1 - ux * out * 0.6, fc[1] + dir[1] * r1, fc[2] + dir[2] * r1 - uz * out * 0.6, A[3] * 0.4];
           const gy = terrain.heightAt(B[0], B[2]);
           if (B[1] < gy - 0.05) B[1] = gy - 0.05;
-          tubes.push({ pts: [A, M, B], layer: SPECIES_INDEX.snag, moss: 0, rand: rng.next(), capB: false, radial: 5 });
+          add({ pts: [A, M, B], layer: SPECIES_INDEX.snag, moss: 0, rand: rng.next(), capB: false, radial: 5 }, true);
         }
       }
     }
-    if (!tubes.length) return;
-    const geo = tubeGeometry(tubes);
-    const mesh = new THREE.Mesh(geo, makeWoodMaterial(this.shared));
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.matrixAutoUpdate = false;
-    scene.add(mesh);
-    this.woodMesh = mesh;
+    // 숲 바닥의 떨어진 가지(썩어 어둡고 군데군데 이끼)
+    for (const d of belts.debris || []) {
+      const layer = d.rotten ? SPECIES_INDEX.elm : SPECIES_INDEX.snag;
+      add({ pts: d.pts, layer, moss: d.moss, rand: d.seed, capA: true, capB: true, radial: d.pts[0][3] > 0.035 ? 6 : 4 }, false);
+      for (const tw of d.twigs) add({ pts: tw, layer, moss: 0, rand: d.seed, radial: 3 }, false);
+    }
+    const mat = makeWoodMaterial(this.shared);
+    this.woodChunks = [];
+    for (const g of groups.values()) {
+      const geo = tubeGeometry(g.tubes);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      scene.add(mesh);
+      this.woodChunks.push({ mesh, center: geo.boundingSphere.center, radius: geo.boundingSphere.radius, maxDist: g.far ? 320 : 90 });
+    }
+  }
+
+  /** 쓰러진 나무·잔가지 묶음: 거리(배율 반영)로 보이기/숨기기 */
+  _updateWood(camera, zoom) {
+    if (!this.woodChunks) return;
+    const z = Math.max(1, zoom);
+    for (const c of this.woodChunks) {
+      const d = c.center.distanceTo(camera.position) - c.radius;
+      c.mesh.visible = d < c.maxDist * Math.min(3, z);
+    }
   }
 
   /** 그림자 전용 묶음: 관찰자 둘레(시야와 무관) */
@@ -475,6 +512,7 @@ export class TreeRenderer {
     const q = camera.quaternion;
     if (last && camera.position.distanceToSquared(last.pos) < 0.09 && Math.abs(q.dot(last.quat)) > 0.99995 && Math.abs(zoom / last.zoom - 1) < 0.02) return;
     this._last = { pos: camera.position.clone(), quat: q.clone(), zoom };
+    this._updateWood(camera, zoom);
     // 컬링 절두체: 시야각을 조금 넓혀 작은 회전에도 빈틈이 없게
     const cc = this.cullCam;
     cc.fov = Math.min(170, camera.fov * 1.12 + 2);

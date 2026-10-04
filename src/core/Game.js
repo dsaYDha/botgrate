@@ -7,6 +7,7 @@ import { TreeRenderer } from '../render/TreeRenderer.js';
 import { VegetationRenderer } from '../render/VegetationRenderer.js';
 import { DistantScenery } from '../render/DistantScenery.js';
 import { PropsRenderer } from '../render/PropsRenderer.js';
+import { AtmosphereFX } from '../effects/AtmosphereFX.js';
 import { baseHeight } from '../world/Terrain.js';
 import { U } from '../render/shaderLib.js';
 import { QUALITY } from '../data/quality.js';
@@ -86,8 +87,9 @@ export class Game {
     this.propsRenderer = new PropsRenderer(this.scene, this.world, this.terrainRenderer.groundTex);
     await step('나무를 심는 중…');
     this.trees = new TreeRenderer(this.scene, this.world, this.quality, renderer);
-    this.vegetation = new VegetationRenderer(this.scene, this.quality);
-    this.distant = new DistantScenery(this.scene, (x, z) => baseHeight(x, z, this.world.data.terrain));
+    this.vegetation = new VegetationRenderer(this.scene, this.world, this.quality);
+    this.distant = new DistantScenery(this.scene, (x, z) => baseHeight(x, z, this.world.data.terrain), this.trees.impostorInfo);
+    this.atmosphere = new AtmosphereFX(this.scene, this.world);
 
 
     await step('사수와 소총을 준비하는 중…');
@@ -279,6 +281,7 @@ export class Game {
     this.terrainRenderer.update(cam.position);
     this.trees.update(cam, this.zoom, this.eyePos, this.sky.shadowExtent);
     this.vegetation.update(cam, this.zoom);
+    this.atmosphere.update(dt, this.time, cam, this.renderer.domElement.height);
 
     // 소리
     this.audio.update(dt, cam.position, cam.quaternion, this.time);
@@ -312,9 +315,18 @@ export class Game {
     if (window.innerWidth !== this._vw || window.innerHeight !== this._vh) this.onResize();
     const r = this.renderer;
     r.info.reset();
+    // 빛줄기: 해의 화면 위치(카메라 앞쪽일 때만)
+    const sd = U.uSunDir.value;
+    const sp = this._sunP || (this._sunP = new THREE.Vector3());
+    sp.copy(this.camera.position).addScaledVector(sd, 1000).project(this.camera);
+    const fwd = this._fwd || (this._fwd = new THREE.Vector3());
+    this.camera.getWorldDirection(fwd);
+    this.post.setSun(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5, Math.max(0, fwd.dot(sd)));
     r.setRenderTarget(this.post.target);
     r.clear();
     r.render(this.scene, this.camera);
+    this.post.computeAO(this.camera);
+    r.setRenderTarget(this.post.target);
     if (this.weaponModel.root.visible) {
       r.clearDepth();
       r.render(this.weaponScene, this.weaponCamera);

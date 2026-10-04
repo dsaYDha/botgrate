@@ -70,6 +70,81 @@ void main() {
   gl_FragColor = vec4(c / 16.0, 1.0);
 }`;
 
+// 빛줄기(산란광 기둥): 해 둘레의 밝은 하늘을 화소에서 해 쪽으로 따라가며 모은다(1/4 해상도).
+// 나뭇잎·줄기 사이로 하늘이 보이는 곳에서만 생기므로 숲 속에서 해를 볼 때 줄기 사이로 빛이 뻗는다.
+const RAYS_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec3 uSun;     // 화면 uv, 세기(해가 카메라 앞에 있을 때)
+uniform float uAspect;
+uniform float uThr;
+varying vec2 vUv;
+float lumi(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+void main() {
+  vec2 d = uSun.xy - vUv;
+  vec2 da = vec2(d.x * uAspect, d.y);
+  float dist = length(da);
+  const int N = 40;
+  vec2 stepv = d / float(N) * min(1.0, 0.75 / max(dist, 1e-3));
+  vec2 uv = vUv;
+  vec3 acc = vec3(0.0);
+  float decay = 1.0;
+  for (int i = 0; i < N; i++) {
+    uv += stepv;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
+    vec3 c = texture2D(tSrc, uv).rgb;
+    float m = smoothstep(uThr, uThr * 1.8, lumi(c));
+    acc += min(c, vec3(uThr * 4.0)) * m * decay;
+    decay *= 0.96;
+  }
+  float fall = exp(-dist * 2.2);
+  gl_FragColor = vec4(acc / float(N) * fall * uSun.z, 1.0);
+}`;
+
+// 가벼운 SSAO(반 해상도, 10표본): 깊이에서 위치·법선을 복원해 주변이 가리는 정도. 0.6 m 반경, 80 m 밖은 끔.
+// 직사광까지 조금 어둡게 하는 근사라 세기는 약하게(인스턴스별 차폐 — 수관 안쪽·줄기 밑동·풀 밑동 — 가 주된 차폐).
+const AO_FRAG = /* glsl */ `
+uniform sampler2D tDepth;
+uniform vec2 uRes;
+uniform vec4 uCam; // near, far, proj[0][0], proj[1][1]
+uniform float uRadius;
+varying vec2 vUv;
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+float linZ(float d) {
+  float ndc = d * 2.0 - 1.0;
+  return 2.0 * uCam.x * uCam.y / (uCam.y + uCam.x - ndc * (uCam.y - uCam.x));
+}
+vec3 viewPos(vec2 uv) {
+  float z = linZ(texture2D(tDepth, uv).r);
+  vec2 ndc = uv * 2.0 - 1.0;
+  return vec3(ndc.x * z / uCam.z, ndc.y * z / uCam.w, -z);
+}
+void main() {
+  float d = texture2D(tDepth, vUv).r;
+  if (d >= 0.99999) { gl_FragColor = vec4(1.0); return; }
+  vec3 P = viewPos(vUv);
+  vec3 Px = viewPos(vUv + vec2(1.0 / uRes.x, 0.0));
+  vec3 Py = viewPos(vUv + vec2(0.0, 1.0 / uRes.y));
+  vec3 N = normalize(cross(Px - P, Py - P));
+  if (N.z < 0.0) N = -N;
+  float far = smoothstep(50.0, 80.0, -P.z);
+  if (far >= 1.0) { gl_FragColor = vec4(1.0); return; }
+  float occ = 0.0;
+  float ang = ign(gl_FragCoord.xy) * 6.2831853;
+  const int NS = 10;
+  for (int i = 0; i < NS; i++) {
+    float fi = (float(i) + 0.5) / float(NS);
+    float a = ang + float(i) * 2.3999632;
+    vec3 S = P + vec3(cos(a), sin(a), 0.0) * sqrt(fi) * uRadius;
+    vec2 suv = vec2(S.x * uCam.z / -S.z, S.y * uCam.w / -S.z) * 0.5 + 0.5;
+    vec3 Q = viewPos(suv);
+    vec3 v = Q - P;
+    float dist = length(v);
+    occ += max(0.0, dot(v / max(dist, 1e-3), N) - 0.15) * (1.0 - smoothstep(uRadius, uRadius * 2.5, dist));
+  }
+  float ao = clamp(1.0 - occ / float(NS) * 1.4, 0.0, 1.0);
+  gl_FragColor = vec4(vec3(mix(ao, 1.0, far)), 1.0);
+}`;
+
 const FINAL_FRAG = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
@@ -79,6 +154,11 @@ uniform vec3 uWhite;       // 화이트 밸런스(선형 곱)
 uniform vec4 uGrade;       // 채도, 대비, 그림자 차갑게, 밝은 곳 따뜻하게
 uniform float uVignette;
 uniform float uHasBloom;
+uniform sampler2D tRays;
+uniform float uRays;
+uniform sampler2D tAO;
+uniform float uAO;
+uniform vec2 uAOTexel;
 varying vec2 vUv;
 
 float lumi(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -86,7 +166,14 @@ float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00
 
 void main() {
   vec3 c = texture2D(tScene, vUv).rgb;
+  if (uAO > 0.0) {
+    // 반 해상도 차폐를 4표본으로 부드럽게
+    float ao = (texture2D(tAO, vUv + uAOTexel * vec2(-0.75, -0.25)).r + texture2D(tAO, vUv + uAOTexel * vec2(0.75, 0.25)).r
+              + texture2D(tAO, vUv + uAOTexel * vec2(-0.25, 0.75)).r + texture2D(tAO, vUv + uAOTexel * vec2(0.25, -0.75)).r) * 0.25;
+    c *= mix(1.0, ao, uAO);
+  }
   if (uHasBloom > 0.5) c += texture2D(tBloom, vUv).rgb * uBloom;
+  if (uRays > 0.0) c += texture2D(tRays, vUv).rgb * uRays * vec3(1.0, 0.93, 0.8);
   c *= uExposure * uWhite;
   // 비네팅(아주 약하게: 렌즈가 아니라 눈의 주변 시야 정도)
   vec2 q = vUv - 0.5;
@@ -129,7 +216,12 @@ export class Post {
       coolShadows: 0.025,
       warmHighlights: 0.015,
       vignette: 0.12,
+      rays: 0.55,
+      raysThreshold: 1.1,
+      ao: 0.55,
+      aoRadius: 0.6,
     };
+    this.sun = new THREE.Vector3(0.5, 0.5, 0);
     if (!this.enabled) return;
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     this.scene = new THREE.WebGLRenderTarget(size.x, size.y, {
@@ -140,6 +232,12 @@ export class Post {
     });
     this.scene.texture.minFilter = THREE.LinearFilter;
     this.scene.texture.generateMipmaps = false;
+    this.aoOn = !!quality.ssao;
+    if (this.aoOn) {
+      // MSAA 깊이를 풀어 받은 깊이 텍스처(SSAO용)
+      this.scene.depthTexture = new THREE.DepthTexture(size.x, size.y);
+      this.scene.depthTexture.type = THREE.UnsignedIntType;
+    }
     this.levels = [];
     this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.tri = new THREE.BufferGeometry();
@@ -167,7 +265,15 @@ export class Post {
       uGrade: { value: new THREE.Vector4() },
       uVignette: { value: 0 },
       uHasBloom: { value: 0 },
+      tRays: { value: null },
+      uRays: { value: 0 },
+      tAO: { value: null },
+      uAO: { value: 0 },
+      uAOTexel: { value: new THREE.Vector2() },
     });
+    this.aoMat = mk(AO_FRAG, { tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uCam: { value: new THREE.Vector4() }, uRadius: { value: 0.6 } });
+    this.raysOn = !!quality.bloom;
+    this.raysMat = mk(RAYS_FRAG, { tSrc: { value: null }, uSun: { value: new THREE.Vector3() }, uAspect: { value: 1 }, uThr: { value: 1 } });
     this.finalMat.toneMapped = true;
     this.quad = new THREE.Mesh(this.tri, this.downMat);
     this.quad.frustumCulled = false;
@@ -179,6 +285,22 @@ export class Post {
   _allocBloom(w, h) {
     for (const l of this.levels) l.dispose();
     this.levels = [];
+    if (this.raysRT) this.raysRT.dispose();
+    this.raysRT = null;
+    if (this.aoRT) this.aoRT.dispose();
+    this.aoRT = null;
+    if (this.aoOn) {
+      this.aoRT = new THREE.WebGLRenderTarget(Math.max(4, w >> 1), Math.max(4, h >> 1), { depthBuffer: false });
+      this.aoRT.texture.minFilter = THREE.LinearFilter;
+      this.aoRT.texture.magFilter = THREE.LinearFilter;
+      this.aoRT.texture.generateMipmaps = false;
+    }
+    if (this.raysOn) {
+      this.raysRT = new THREE.WebGLRenderTarget(Math.max(4, w >> 2), Math.max(4, h >> 2), { type: THREE.HalfFloatType, depthBuffer: false });
+      this.raysRT.texture.minFilter = THREE.LinearFilter;
+      this.raysRT.texture.magFilter = THREE.LinearFilter;
+      this.raysRT.texture.generateMipmaps = false;
+    }
     if (!this.bloomOn) return;
     let lw = Math.max(1, w >> 1);
     let lh = Math.max(1, h >> 1);
@@ -210,7 +332,31 @@ export class Post {
     this.renderer.render(this.quadScene, this.cam);
   }
 
-  /** 장면 렌더 뒤 호출: 블룸 → 최종 합성 */
+  /** 장면(총 제외)을 그린 직후: 깊이로 SSAO(1인칭 총을 그리기 전에 — 총이 깊이를 덮어쓰므로) */
+  computeAO(camera) {
+    if (!this.enabled || !this.aoRT) return;
+    const m = this.aoMat.uniforms;
+    m.tDepth.value = this.scene.depthTexture;
+    m.uRes.value.set(this.aoRT.width, this.aoRT.height);
+    const pm = camera.projectionMatrix.elements;
+    m.uCam.value.set(camera.near, camera.far, pm[0], pm[5]);
+    m.uRadius.value = this.params.aoRadius;
+    const r = this.renderer;
+    const prev = r.getRenderTarget();
+    const autoClear = r.autoClear;
+    r.autoClear = false;
+    this._pass(this.aoMat, this.aoRT);
+    r.setRenderTarget(prev);
+    r.autoClear = autoClear;
+    this._aoReady = true;
+  }
+
+  /** 해의 화면 위치(uv)와 세기(카메라가 해를 향한 정도) */
+  setSun(u, v, k) {
+    this.sun.set(u, v, k);
+  }
+
+  /** 장면 렌더 뒤 호출: 블룸 → 빛줄기 → 최종 합성 */
   finish() {
     if (!this.enabled) return;
     const r = this.renderer;
@@ -241,6 +387,24 @@ export class Post {
       }
     }
     const fm = this.finalMat.uniforms;
+    // 해가 화면 근처(앞쪽)에 있을 때만 빛줄기
+    const sunK = this.raysRT ? Math.max(0, Math.min(1, (this.sun.z - 0.35) / 0.4)) * P.rays : 0;
+    if (sunK > 0.001) {
+      const rm = this.raysMat.uniforms;
+      rm.tSrc.value = this.scene.texture;
+      rm.uSun.value.set(this.sun.x, this.sun.y, 1);
+      rm.uAspect.value = this.scene.width / this.scene.height;
+      rm.uThr.value = P.raysThreshold;
+      this._pass(this.raysMat, this.raysRT);
+      fm.tRays.value = this.raysRT.texture;
+    }
+    fm.uRays.value = sunK;
+    fm.uAO.value = this.aoRT && this._aoReady ? P.ao : 0;
+    if (this.aoRT) {
+      fm.tAO.value = this.aoRT.texture;
+      fm.uAOTexel.value.set(1 / this.aoRT.width, 1 / this.aoRT.height);
+    }
+    this._aoReady = false;
     fm.tBloom.value = this.levels.length ? this.levels[0].texture : null;
     fm.uHasBloom.value = this.bloomOn && this.levels.length ? 1 : 0;
     fm.uBloom.value = P.bloom;

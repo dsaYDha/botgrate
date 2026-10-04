@@ -151,5 +151,21 @@ export const WORLD = {
   playerClearing: 2.6,
 
   // 원경: 플레이 구역 밖 숲띠 격자(지평선까지 이어지는 방풍림 경관)
-  distant: { spacing: 420, extent: 6500, height: 15, width: 18 },
+  // 원경: 지도 밖 방풍림 격자, 마을(집·창고·곡물 엘리베이터), 송전선(격자 철탑 30 m, 경간 340 m), 나무 전신주(9 m, 55 m 간격)
+  distant: {
+    spacing: 420,
+    extent: 6500,
+    height: 15,
+    width: 18,
+    villages: [
+      { x: -2300, z: 380, radius: 300, ang: 0.15, houses: 42, elevator: { x: -1380, z: 640 } },
+      { x: 2600, z: -2500, radius: 260, ang: -0.4, houses: 28 },
+      { x: 3200, z: 2450, radius: 200, ang: 1.2, houses: 18 },
+    ],
+    powerLines: [
+      { from: [-1160, -6500], to: [-1100, 6500], span: 340, height: 32 },
+      { from: [-6500, 1180], to: [6500, 1120], span: 340, height: 32 },
+      { from: [-790, 262], to: [-2050, 330], span: 55, height: 9, wood: true },
+    ],
+  },
 };

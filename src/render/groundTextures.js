@@ -416,11 +416,12 @@ function drawThatch(L) {
 function drawStubble(L) {
   // 1 m 타일에 수확 줄 6개(줄 간격 16.7 cm), 줄은 타일의 x축 방향으로 놓인다
   const { rng, c, h, size: S } = L;
-  L.background([118, 98, 72], 0.1, 4, 0.35, 0.08, [104, 88, 66]);
+  // 9월 말 밀 그루터기 밭: 흙보다 짚 부스러기가 더 덮여 멀리서 옅은 황갈색
+  L.background([136, 116, 84], 0.1, 4, 0.35, 0.08, [122, 104, 76]);
   const rows = 6;
   const pitch = S / rows;
   // 줄 사이 짚 부스러기(줄 방향으로 누움)
-  for (let i = 0; i < 1100; i++) {
+  for (let i = 0; i < 2100; i++) {
     const x = rng.next() * S;
     const y = rng.next() * S;
     straw(L, x, y, rng.range(6, 30), rng.range(-0.35, 0.35) + (rng.chance(0.15) ? rng.range(0, Math.PI) : 0), jitter(rng, [196, 176, 124], 0.12), rng.range(0.8, 1.8));

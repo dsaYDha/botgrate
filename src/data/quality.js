@@ -6,6 +6,7 @@ export const QUALITY = {
     post: false, // HDR 후처리(블룸·색보정) 없이 바로 화면에(셰이더 안에서 톤매핑)
     msaa: 0,
     bloom: false,
+    ssao: false,
     shadowMapSize: 1024,
     shadowDistance: 90,
     shadowRadius: 1.5,
@@ -22,6 +23,7 @@ export const QUALITY = {
     post: true,
     msaa: 4,
     bloom: true,
+    ssao: true,
     shadowMapSize: 2048,
     shadowDistance: 150,
     shadowRadius: 2,
@@ -38,6 +40,7 @@ export const QUALITY = {
     post: true,
     msaa: 4,
     bloom: true,
+    ssao: true,
     shadowMapSize: 2048,
     shadowDistance: 220,
     shadowRadius: 2.5,

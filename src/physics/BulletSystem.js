@@ -389,6 +389,9 @@ export class BulletSystem {
       const mat = MATERIALS.soil;
       const crit = mat.ricochetCriticalDeg * (0.7 + 0.6 * rng.next());
       const surface = this.world.terrain.surfaceAt(px, pz);
+      // 숲 바닥은 흙 위에 낙엽층이 덮여 있다(화면의 낙엽층 지면과 같은 지면 종류 지도)
+      const top = surface === 'forest' ? MATERIALS.leafLitter : null;
+      const material = top ? 'leafLitter' : 'soil';
       if (grazing < crit && speed > 150 && rng.next() < mat.ricochetChance) {
         // 도탄: 법선 성분 반사(감쇠), 접선 성분 감속, 텀블링
         const vn = dn * speed;
@@ -402,14 +405,28 @@ export class BulletSystem {
         b.z = pz + n[2] * 0.03;
         b.dragMul = 3.5;
         b.spin = false;
-        this.events.emit('bullet:impact', { ...base, kind: 'ground', material: 'soil', surface, normal: { x: n[0], y: n[1], z: n[2] }, ricochet: true });
-        return;
+        let ricochet = true;
+        if (top) {
+          // 낙엽층을 비스듬히 들어갔다 나오는 길이만큼 감속·편향(고체 재질과 같은 식)
+          const L = Math.min(3, (2 * top.thickness) / Math.max(Math.sin(grazing * DEG), 0.017));
+          const sp = this._speed(b);
+          const P = top.penetration * Math.pow(sp / ammo.penetrationRefVelocity, top.exponent);
+          if (P <= L) ricochet = false;
+          else {
+            const vOut = ammo.penetrationRefVelocity * Math.pow((P - L) / top.penetration, 1 / top.exponent);
+            this._deflect(b, top.deflectionDeg * DEG * Math.sqrt(L / P) * Math.abs(rng.gauss()), vOut);
+          }
+        }
+        if (ricochet) {
+          this.events.emit('bullet:impact', { ...base, kind: 'ground', material, surface, normal: { x: n[0], y: n[1], z: n[2] }, ricochet: true });
+          return;
+        }
       }
       b.alive = false;
       b.x = px;
       b.y = py;
       b.z = pz;
-      this.events.emit('bullet:impact', { ...base, kind: 'ground', material: 'soil', surface, normal: { x: n[0], y: n[1], z: n[2] }, ricochet: false });
+      this.events.emit('bullet:impact', { ...base, kind: 'ground', material, surface, normal: { x: n[0], y: n[1], z: n[2] }, ricochet: false });
       return;
     }
 

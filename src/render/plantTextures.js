@@ -44,7 +44,7 @@ const C = {
   thistleLeaf: [76, 90, 58],
   pappus: [222, 218, 206],
   purple: [118, 66, 104],
-  burdockLeaf: [58, 76, 38],
+  burdockLeaf: [66, 84, 44],
   burr: [96, 72, 44],
   nettle: [44, 66, 30],
   sunStalk: [128, 108, 70],
@@ -220,7 +220,7 @@ function wormwood(T, rng, tall) {
         for (let f = 0; f < 4; f++) T.leaf(px, py, a + rng.range(-0.5, 0.5), sz * rng.range(0.5, 1), sz * 0.22, rgb(...C.wormLeaf, rng.range(0.85, 1.1)), 'lance');
       }
       if (i >= (tall ? 4 : 5)) {
-        for (let k = 0; k < 6; k++) T.dot(px + rng.range(-16, 16), py + rng.range(-10, 6), rng.range(1.5, 2.6), rgb(...lerpC(C.tansy, C.brown, rng.next() * 0.6)));
+        for (let k = 0; k < 8; k++) T.dot(px + rng.range(-16, 16), py + rng.range(-10, 6), rng.range(1.0, 1.7), rgb(...lerpC(C.tansy, C.brown, rng.next() * 0.6)));
       }
     }
   }
@@ -247,15 +247,32 @@ function thistle(T, rng, pappus) {
       const py = H - len * t;
       T.leaf(px, py, (i % 2 ? 1 : -1) * rng.range(0.6, 1.1), rng.range(34, 52) * (1 - t * 0.5), 18, rgb(...lerpC(C.thistleLeaf, C.brown, rng.next() * 0.5)), 'lobed');
     }
-    // 꽃송이: 마른 갈색 총포 + 보랏빛 흔적 또는 흰 갓털
+    // 꽃송이: 가시 돋친 작은 총포 + (흰 갓털 실 / 보랏빛 꽃술 / 마른 갈색)
     const nh = rng.int(1, 3);
     for (let h = 0; h < nh; h++) {
       const hx = top[0] + rng.range(-18, 18);
       const hy = top[1] + rng.range(0, 30);
       T.stem([[top[0], top[1] + 20], [hx, hy]], 1.6, rgb(...C.straw, 0.9));
-      T.ellipse(hx, hy, 9, 11, 0, rgb(...C.burr));
-      if (pappus || rng.chance(0.4)) T.ellipse(hx, hy - 12, 13, 10, 0, rgb(...C.pappus, rng.range(0.9, 1.0)));
-      else T.ellipse(hx, hy - 9, 8, 6, 0, rgb(...C.purple, 0.85));
+      T.ellipse(hx, hy, 5.5, 6.5, 0, rgb(...C.burr, rng.range(0.8, 1.05)));
+      for (let k = 0; k < 9; k++) {
+        const a = rng.range(-Math.PI, Math.PI);
+        T.stem([[hx, hy], [hx + Math.cos(a) * 8, hy + Math.sin(a) * 8]], 0.8, rgb(...C.straw, 0.75));
+      }
+      const mode = pappus ? (rng.chance(0.55) ? 1 : 0) : rng.chance(0.18) ? 1 : rng.chance(0.4) ? 2 : 0;
+      if (mode === 1) {
+        // 씨앗이 익어 터진 갓털: 가는 흰 실이 부채꼴로
+        for (let k = 0; k < 28; k++) {
+          const a = -Math.PI / 2 + rng.range(-1.25, 1.25);
+          const l = rng.range(7, 15);
+          T.stem([[hx, hy - 4], [hx + Math.cos(a) * l, hy - 4 + Math.sin(a) * l]], 0.7, `rgba(${C.pappus.join(',')},0.7)`);
+        }
+      } else if (mode === 2) {
+        for (let k = 0; k < 14; k++) {
+          const a = -Math.PI / 2 + rng.range(-0.6, 0.6);
+          const l = rng.range(4, 8);
+          T.stem([[hx, hy - 4], [hx + Math.cos(a) * l, hy - 4 + Math.sin(a) * l]], 1.1, rgb(...C.purple, rng.range(0.7, 0.95)));
+        }
+      }
     }
   }
 }
@@ -263,11 +280,42 @@ function thistle(T, rng, pappus) {
 function burdock(T, rng, tallStem) {
   const W = T.W;
   const H = T.H;
-  // 큰 염통 모양 잎(시들어 가장자리 누렇게)
+  // 큰 염통 모양 잎(9월 말: 벌레 먹고 찢기고 가장자리부터 누렇게·갈색으로)
   for (let i = 0; i < 6; i++) {
     const a = rng.range(-1.3, 1.3);
-    const col = lerpC(C.burdockLeaf, rng.chance(0.4) ? C.brown : C.yellowing, rng.range(0.1, 0.55));
-    T.leaf(W * 0.5 + rng.gauss() * 14, H - rng.range(0, 30), a, rng.range(110, 170), rng.range(90, 130), rgb(...col), 'cordate');
+    const col = lerpC(C.burdockLeaf, rng.chance(0.45) ? C.brown : C.yellowing, rng.range(0.2, 0.7));
+    const lx = W * 0.5 + rng.gauss() * 14;
+    const ly = H - rng.range(0, 30);
+    const L = rng.range(110, 170);
+    T.leaf(lx, ly, a, L, rng.range(90, 130), rgb(...col), 'cordate');
+    // 잎맥(밝은 줄)
+    T.stem([[lx, ly], [lx + Math.sin(a) * L * 0.9, ly - Math.cos(a) * L * 0.9]], 1.6, rgb(...lerpC(col, C.straw, 0.5)));
+    // 벌레 먹은 구멍(불규칙한 모양) + 가장자리 뜯김
+    const c = T.c;
+    c.save();
+    c.globalCompositeOperation = 'destination-out';
+    const blob = (bx, by, r) => {
+      const n = rng.int(5, 8);
+      c.beginPath();
+      for (let k = 0; k < n; k++) {
+        const q = (k / n) * Math.PI * 2;
+        const rr = r * rng.range(0.45, 1.15);
+        c[k ? 'lineTo' : 'moveTo'](T.X(bx + Math.cos(q) * rr * 1.3), T.Y(by + Math.sin(q) * rr));
+      }
+      c.closePath();
+      c.fill();
+    };
+    for (let k = 0; k < 4; k++) {
+      const t = rng.range(0.2, 0.9);
+      blob(lx + Math.sin(a) * L * t + rng.range(-28, 28), ly - Math.cos(a) * L * t + rng.range(-18, 18), rng.range(2.5, 7));
+    }
+    for (let k = 0; k < 3; k++) {
+      const t = rng.range(0.35, 0.95);
+      const side = rng.chance(0.5) ? 1 : -1;
+      const w = rng.range(30, 50);
+      blob(lx + Math.sin(a) * L * t + Math.cos(a) * w * side, ly - Math.cos(a) * L * t + Math.sin(a) * w * side, rng.range(6, 12));
+    }
+    c.restore();
   }
   if (tallStem || rng.chance(0.6)) {
     const len = H * rng.range(0.75, 0.95);
@@ -282,9 +330,24 @@ function burdock(T, rng, tallStem) {
       const bx = pts[2][0] + rng.range(-60, 60);
       const by = pts[2][1] + rng.range(0, 90);
       T.stem([[pts[1][0], pts[1][1] - 40], [bx, by]], 2, rgb(104, 72, 50));
-      for (let k = 0; k < 5; k++) T.dot(bx + rng.range(-14, 14), by + rng.range(-10, 10), rng.range(5, 7.5), rgb(...C.burr, rng.range(0.8, 1.1)));
+      for (let k = 0; k < 5; k++) burr(T, rng, bx + rng.range(-14, 14), by + rng.range(-10, 10), rng.range(3, 4.2));
     }
   }
+}
+
+// 우엉 열매(가시 공): 마른 갈색 몸통 + 끝이 갈고리진 총포 조각이 사방으로(끝은 바랜 짚색)
+function burr(T, rng, x, y, r) {
+  const k = rng.range(0.8, 1.1);
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2 + rng.range(-0.15, 0.15);
+    const l = r * rng.range(1.6, 2.2);
+    const ex = x + Math.cos(a) * l;
+    const ey = y + Math.sin(a) * l;
+    T.stem([[x, y], [ex, ey]], 0.9, rgb(...C.burr, k * 0.95));
+    T.stem([[ex, ey], [ex + Math.cos(a + 1.6) * 1.4, ey + Math.sin(a + 1.6) * 1.4]], 0.7, rgb(...C.straw, 0.8));
+  }
+  T.dot(x, y, r, rgb(...C.burr, k * 0.85));
+  T.dot(x - r * 0.3, y - r * 0.3, r * 0.45, rgb(...lerpC(C.burr, C.straw, 0.35), k));
 }
 
 function nettle(T, rng) {
@@ -310,14 +373,20 @@ function nettle(T, rng) {
 function stubble(T, rng, volunteers) {
   const W = T.W;
   const H = T.H;
-  // 밀 그루터기: 속 빈 짚 줄기(지름 3~4 mm ≈ 4~5 화소), 끝이 비스듬히 잘림, 높이 10~20 cm(칸 높이 = 그루터기 높이)
-  for (let i = 0; i < 46; i++) {
-    const x0 = rng.range(8, W - 8);
-    const len = H * rng.range(0.55, 1.0);
-    const lean = rng.gauss() * 18;
-    const k = rng.range(0.8, 1.1);
-    T.stem([[x0, H], [x0 + lean, H - len]], rng.range(4, 6), rgb(...lerpC(C.straw, C.brown, rng.next() * 0.35), k));
-    T.ellipse(x0 + lean, H - len, 3, 1.8, 0, rgb(...C.strawPale, k));
+  // 밀 그루터기: 속 빈 짚 줄기(지름 3~4 mm — 카드 폭 0.3 m에서 약 3 화소), 포기마다 몇 줄기씩 모여 비스듬히 잘림,
+  // 높이 10~20 cm(칸 높이 = 그루터기 높이). 일부는 콤바인 바퀴에 눌려 기울었다
+  for (let p = 0; p < 9; p++) {
+    const px = rng.range(16, W - 16);
+    const n = rng.int(2, 5);
+    const tilt = rng.chance(0.2) ? rng.range(-90, 90) : 0;
+    for (let i = 0; i < n; i++) {
+      const x0 = px + rng.range(-7, 7);
+      const len = H * rng.range(0.6, 1.0) * (tilt ? 0.8 : 1);
+      const lean = rng.gauss() * 10 + tilt;
+      const k = rng.range(0.8, 1.1);
+      T.stem([[x0, H], [x0 + lean, H - len]], rng.range(2.4, 3.4), rgb(...lerpC(C.straw, C.brown, rng.next() * 0.35), k));
+      T.ellipse(x0 + lean, H - len, 2, 1.2, 0, rgb(...C.strawPale, k));
+    }
   }
   // 떨어진 짚 몇 가닥(낮게 눕음)
   for (let i = 0; i < 8; i++) {
@@ -413,7 +482,15 @@ function drawPlantTile(ctx, i, key, rng) {
         const top = [x0 + rng.gauss() * 20, PLANT_TILE_H * rng.range(0.08, 0.25)];
         T.stem([[x0, PLANT_TILE_H], top], 2.6, rgb(96, 100, 56));
         for (let k = 0; k < 6; k++) T.leaf(x0 + (top[0] - x0) * (k / 7), PLANT_TILE_H - (PLANT_TILE_H - top[1]) * (k / 7), (k % 2 ? 1 : -1) * 1.1, 40, 18, rgb(...C.greenDark), 'lobed');
-        for (let k = 0; k < 9; k++) T.dot(top[0] + rng.range(-28, 28), top[1] + rng.range(-8, 14), rng.range(4, 6), rgb(...lerpC(C.tansy, C.brown, rng.next() * 0.7)));
+        for (let k = 0; k < 16; k++) {
+          const hx = top[0] + rng.range(-24, 24);
+          const hy = top[1] + rng.range(-4, 9) + Math.abs(hx - top[0]) * 0.12;
+          const r = rng.range(1.8, 2.8);
+          T.stem([[top[0], top[1] + 14], [hx, hy]], 0.8, rgb(96, 100, 56));
+          const col = lerpC(C.tansy, C.brown, rng.next() * 0.7);
+          T.dot(hx, hy, r, rgb(...col));
+          T.dot(hx, hy, r * 0.45, rgb(...col, 0.7));
+        }
       }
       break;
     case 'stubble':

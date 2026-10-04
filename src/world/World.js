@@ -22,6 +22,8 @@ export class World {
     this.props = new Props(WORLD, this.layout, this.terrain);
     this.props.register(this.hash);
     this.canopy = this.belts.buildCanopyMap(WORLD.mapHalf, 1);
+    // 숲 바닥 식생(빛 드는 곳)의 판정이 수관 지도를 쓴다(GroundCover.coverAt)
+    this.terrain.canopy = this.canopy;
     const beltHeights = {};
     for (const b of this.layout.belts) {
       const ts = this.belts.trees.filter((t) => t.belt === b.id && !t.dead && !t.sapling);

@@ -9,7 +9,7 @@ await server.listen();
 const browser = await chromium.launch({ args: ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] });
 const page = await browser.newPage({ viewport: { width: W, height: H } });
 page.on('pageerror', (e) => console.log('pageerror', e.message));
-page.on('console', (m) => { if (m.type() === 'error') console.log('console', m.text()); });
+page.on('console', (m) => { if (m.type() === 'error' || /^\[/.test(m.text())) console.log('console', m.text()); });
 await page.addInitScript((q) => { try { localStorage.setItem('windbreak-fps-settings-v1', JSON.stringify({ quality: q, windMode: 'fixed', windSpeed: 5, windDir: 270, fov: 55 })); } catch {} }, process.env.SHOTS_QUALITY || 'high');
 await page.goto(`${server.resolvedUrls.local[0]}?autostart&testinput&cam=${x},0,${z},${yaw},${pitch},55`);
 await page.waitForFunction(() => window.__game && window.__game.ready, null, { timeout: 300000 });

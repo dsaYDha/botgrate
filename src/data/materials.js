@@ -81,6 +81,19 @@ export const MATERIALS = {
     effect: 'straw',
     sound: 'impactDirt',
   },
+  leafLitter: {
+    // 숲 바닥 낙엽층: 낙엽·잔가지가 느슨하게 쌓인 층(두께 약 3~5 cm, 부피 밀도 약 40~90 kg/m³ ≈ 연조직의 1/15).
+    // 밀도 비례로 관통 능력 약 7 m(900 m/s). 지면 맨 위 층(kind 'layer')으로만 쓴다: 탄은 이 층을 지나 아래 흙에
+    // 박히거나 흙에서 도탄한다. 수직에 가깝게 맞으면 층 길이가 몇 cm라 차이가 없고, 얕게 스쳐 도탄하면
+    // 층 속을 들어갔다 나오는 길이(2 × 두께 / sin 각, 수십 cm~1 m)만큼 느려지고 조금 꺾인다.
+    kind: 'layer',
+    thickness: 0.04,
+    penetration: 7,
+    exponent: 1.0,
+    deflectionDeg: 6,
+    effect: 'leaves',
+    sound: 'impactDirt',
+  },
   foliage: {
     // 수관(잎·잔가지)
     kind: 'volume',

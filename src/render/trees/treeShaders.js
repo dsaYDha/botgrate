@@ -175,6 +175,9 @@ layout(location = 1) out highp vec4 o1;
 #endif
 `;
 
+export function treeFrag(body) {
+  return frag(body);
+}
 function frag(body) {
   // 그림자 맵 표본 선언은 빛을 받는 머티리얼(TREE_LIT)만: 깊이·굽기·임포스터는 그림자 표본기가 없다
   return `#include <common>\n#include <packing>\n#ifdef TREE_LIT\n#include <shadowmap_pars_fragment>\n#endif\n${commonGLSL()}\n${STEM_GLSL}\n${TREE_FRAG}\n${OUT_DECL}\n${body}`;
@@ -183,7 +186,7 @@ function vert(body) {
   return `#include <common>\n#ifdef TREE_LIT\n#include <shadowmap_pars_vertex>\n#endif\n${commonGLSL()}\n${STEM_GLSL}\n${TREE_COMMON}\n${body}`;
 }
 // 조각 셰이더의 그림자 varying 선언과 짝(값은 쓰지 않음: 그림자 위치는 treeSunShadow가 직접 계산)
-const SHADOW_VARY = /* glsl */ `
+export const SHADOW_VARY = /* glsl */ `
 #if defined( TREE_LIT ) && defined( USE_SHADOWMAP ) && NUM_SUN_LIGHT_SHADOWS > 0
   vSunShadowWorldPosition = vec4(vWP, vViewZ);
   vSunShadowWorldNormal = vec3(0.0);
@@ -667,8 +670,9 @@ void main() {
     float up = smoothstep(0.1, 0.7, N0.y);
     float m = up * vW.y * smoothstep(0.3, 0.65, vnoise(vWP.xz * 3.0 + vWP.y * 2.0) * 0.7 + vnoise(vWP.xz * 11.0) * 0.3);
     alb = mix(alb, vec3(0.07, 0.11, 0.03), m);
-    alb *= mix(0.6, 1.0, smoothstep(0.02, 0.25, vWP.y - vGY));
-    ao = nm.b * mix(0.55, 1.0, smoothstep(0.0, 0.3, vWP.y - vGY));
+    // 땅에 닿은 아랫면만 습해 어둡다
+    alb *= mix(0.72, 1.0, smoothstep(0.0, 0.1, vWP.y - vGY));
+    ao = mix(1.0, nm.b, 0.6) * mix(0.7, 1.0, smoothstep(0.0, 0.15, vWP.y - vGY));
     tn = nm.rg * 2.0 - 1.0;
   } else if (vW.w < 1.5) {
     // 끝면: 부러진 섬유 + 바랜 나이테

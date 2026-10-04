@@ -24,6 +24,9 @@ export const CAMS = [
   { id: '3-shrub', name: '덤불 근접(남쪽 띠 가장자리 관목)', x: 431, z: 246.2, eye: 1.5, yaw: 180, pitch: -3 },
   { id: '4-interior', name: '숲띠 내부(열 사이, 서쪽)', x: 300, z: 260, eye: 1.65, yaw: -90, pitch: 6 },
   { id: '5-end', name: '숲띠 끝 측면(남쪽 띠 서쪽 끝)', x: -478, z: 239.5, eye: 1.65, yaw: -96, pitch: 2 },
+  // 다섯 곳에 잘 안 보이는 항목 확인용: 둔덕(곡면·그림자 경계), 뿌리째 쓰러진 나무(숲 바닥)
+  { id: '6-berm', name: '흙둔덕(그루터기 밭, 남쪽 띠 앞)', x: 386, z: 229, eye: 1.65, yaw: 130, pitch: -12 },
+  { id: '7-fallen', name: '쓰러진 나무와 뿌리판(동쪽 띠 가장자리)', x: 500, z: -69, eye: 1.65, yaw: -45, pitch: -9 },
 ];
 
 // SHOTS_ONLY=2-field,4-interior 처럼 일부만

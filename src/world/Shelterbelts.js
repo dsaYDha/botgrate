@@ -30,6 +30,80 @@ export class Shelterbelts {
     this._placeFallen();
     for (const t of this.trees) this._finalizeTree(t);
     for (const s of this.shrubs) this._finalizeShrub(s);
+    this._placeDebris();
+  }
+
+  /** 숲 바닥의 떨어진 가지·썩은 가지(지름 2~10 cm, 길이 0.5~3.5 m). 판정 가지로도 등록 */
+  _placeDebris() {
+    const rng = new Random((this.world.seed ^ 0xdeb715) >>> 0);
+    const terrain = this.terrain;
+    this.debris = [];
+    for (const belt of this.layout.belts) {
+      const n = Math.round((belt.length / 100) * 120);
+      const near = this.trees.filter((t) => t.belt === belt.id);
+      for (let i = 0; i < n; i++) {
+        const u = rng.range(belt.from, belt.to);
+        if (belt.coverageDistance(u) < 2) continue;
+        const v = rng.range(-belt.half + 0.6, belt.half - 0.6);
+        const p = belt.toWorld(u, v);
+        const ang = rng.range(0, Math.PI * 2);
+        const len = rng.chance(0.7) ? rng.range(0.5, 1.6) : rng.range(1.6, 3.5);
+        const r0 = Math.min(0.065, 0.015 + len * 0.013 * rng.range(0.7, 1.3));
+        const ex = p.x + Math.cos(ang) * len;
+        const ez = p.z + Math.sin(ang) * len;
+        // 서 있는 줄기를 뚫고 지나가지 않게
+        if (near.some((t) => distPointSeg2(t.x, t.z, p.x, p.z, ex, ez) < t.r0 * 1.4 + r0 + 0.05)) continue;
+        // 약 0.3 m마다 점: 낙엽층 미세 요철(±5 cm) 위에 얹히도록 주변의 높은 곳에 걸친다
+        const K = Math.max(2, Math.round(len / 0.3));
+        const pts = [];
+        const cx = Math.cos(ang);
+        const cz = Math.sin(ang);
+        const bend = rng.range(-0.08, 0.08);
+        for (let k = 0; k <= K; k++) {
+          const t = k / K;
+          const off = bend * Math.sin(Math.PI * t) * len;
+          const x = p.x + cx * len * t - cz * off;
+          const z = p.z + cz * len * t + cx * off;
+          const r = r0 * (1 - 0.55 * t);
+          let g = terrain.heightAt(x, z);
+          for (const e of [-0.15, 0.15]) g = Math.max(g, terrain.heightAt(x + cx * e, z + cz * e) - 0.01);
+          pts.push([x, g + r * 0.85, z, r]);
+        }
+        // 바랜 회색 가지 / 썩어 가는 갈색 가지(이끼)
+        const rotten = rng.chance(0.45);
+        const d = { pts, moss: rotten ? rng.range(0.3, 0.9) : rng.range(0, 0.25), seed: rng.next(), rotten, twigs: [] };
+        // 곁가지(잔가지 몇 개, 땅에서 조금 들림)
+        const nt = rng.int(0, 3);
+        for (let k = 0; k < nt; k++) {
+          const t = rng.range(0.25, 0.85);
+          const f = t * K;
+          const j = Math.min(K - 1, Math.floor(f));
+          const q = f - j;
+          const A = pts[j];
+          const B = pts[j + 1];
+          const sx = A[0] + (B[0] - A[0]) * q;
+          const sy = A[1] + (B[1] - A[1]) * q;
+          const sz = A[2] + (B[2] - A[2]) * q;
+          const ta = ang + (rng.chance(0.5) ? 1 : -1) * rng.range(0.5, 1.2);
+          const tl = rng.range(0.2, 0.6) * len * 0.6;
+          const tx = sx + Math.cos(ta) * tl;
+          const tz = sz + Math.sin(ta) * tl;
+          const tr = Math.max(0.005, (A[3] + (B[3] - A[3]) * q) * 0.45);
+          d.twigs.push([
+            [sx, sy, sz, tr],
+            [tx, Math.max(terrain.heightAt(tx, tz) + tr, sy + rng.range(-0.02, 0.12)), tz, tr * 0.5],
+          ]);
+        }
+        this.debris.push(d);
+        for (let k = 0; k < K; k++) {
+          const a = pts[k];
+          const b = pts[k + 1];
+          const r = (a[3] + b[3]) * 0.5;
+          if (r < 0.012) continue;
+          this.limbs.push({ kind: 'limb', ax: a[0], ay: a[1], az: a[2], bx: b[0], by: b[1], bz: b[2], r, material: 'woodDead' });
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
