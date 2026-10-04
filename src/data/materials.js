@@ -69,6 +69,18 @@ export const MATERIALS = {
     effect: 'hit',
     sound: 'impactBody',
   },
+  hay: {
+    // 둥글게 꽉 말린 짚 더미(밀도 약 120~180 kg/m³). 실제 사례: 5.56은 작은 사각 짚단(45 cm)은 뚫고
+    // 큰 원형 더미(지름 1.5 m)는 가운데에서 대개 멈춘다. 7.62 보통탄은 원형 더미 하나를 관통.
+    // → 900 m/s 관통 1.25 m: 가운데(1.5 m)는 막히고, 가장자리 현은 느려져서 나간다.
+    kind: 'solid',
+    penetration: 1.25,
+    exponent: 1.2,
+    deflectionDeg: 6,
+    tumbleDrag: 3.0,
+    effect: 'straw',
+    sound: 'impactDirt',
+  },
   foliage: {
     // 수관(잎·잔가지)
     kind: 'volume',
@@ -76,6 +88,36 @@ export const MATERIALS = {
     twigRatePerMeter: 0.16,
     twigDeflectDeg: 1.6,
     twigSpeedLoss: 0.05,
+    effect: 'leaves',
+    sound: 'impactLeaves',
+  },
+  stubbleCover: {
+    // 밀 그루터기(줄기 지름 3~4 mm, 약 400개/m², 높이 10~20 cm): n·d ≈ 1.4회/m, 맞아도 거의 안 꺾임
+    kind: 'volume',
+    lossPerMeter: 0.002,
+    twigRatePerMeter: 1.4,
+    twigDeflectDeg: 0.15,
+    twigSpeedLoss: 0.002,
+    effect: 'straw',
+    sound: 'impactLeaves',
+  },
+  weeds: {
+    // 휴경지·숲 가장자리 잡초(줄기 5~10 mm, 수십 개/m²)
+    kind: 'volume',
+    lossPerMeter: 0.003,
+    twigRatePerMeter: 0.25,
+    twigDeflectDeg: 0.5,
+    twigSpeedLoss: 0.005,
+    effect: 'leaves',
+    sound: 'impactLeaves',
+  },
+  sunflower: {
+    // 마른 해바라기(줄기 지름 2.5~3 cm, 줄 간격 70 cm × 포기 간격 30 cm ≈ 4.8포기/m²): n·d ≈ 0.14회/m
+    kind: 'volume',
+    lossPerMeter: 0.004,
+    twigRatePerMeter: 0.14,
+    twigDeflectDeg: 2.0,
+    twigSpeedLoss: 0.03,
     effect: 'leaves',
     sound: 'impactLeaves',
   },

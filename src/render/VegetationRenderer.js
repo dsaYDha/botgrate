@@ -55,8 +55,6 @@ function bladeGeometry(blades, segs) {
 const VERT = /* glsl */ `
 uniform vec4 uTile;     // x0, z0, 타일 키, 인스턴스 수
 uniform vec4 uTileLod;  // 덩이 크기 배수, 밀도(0~1), 0, 0
-uniform sampler2D uSurfA;
-uniform sampler2D uSurfB;
 attribute vec4 aB;
 attribute vec2 aS;
 varying vec3 vWP;
@@ -111,7 +109,7 @@ void main() {
 
   // 그루터기는 수확 줄에 맞춰 정렬
   if (kind < 0.5) {
-    float dir = sb.g * 3.14159265;
+    float dir = surfSampleC(p).r * 3.14159265;
     vec2 rowN = vec2(-sin(dir), cos(dir));
     float q = dot(p, rowN);
     float qs = (floor(q / 0.18) + 0.5) * 0.18;
@@ -151,7 +149,7 @@ void main() {
   vec2 bdir = vec2(cos(ang), sin(ang));
   vec2 basep = p + bdir * aB.y * spread * min(lod, 2.0);
 
-  float gy = hd0.x + rutProfile(hd0.y);
+  float gy = terrainHeightVis(basep);
   // 바람에 따른 휨(풀 높이 근처 바람, 강성 반영). 비용을 줄인 windAt: 차폐·난류 한 번, 돌풍 패치.
   vec2 shuv = (basep + uShelterInfo.x) / (uShelterInfo.y * (uShelterInfo.z - 1.0));
   shuv = shuv * (uShelterInfo.z - 1.0) / uShelterInfo.z + 0.5 / uShelterInfo.z;

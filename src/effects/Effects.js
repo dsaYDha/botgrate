@@ -254,6 +254,17 @@ export class Effects {
         });
       this.scars.add({ x: e.x, y: e.y, z: e.z }, e.normal, 0.06);
       if (e.y > 2.5) this._leaves(e.x, e.y + 1, e.z, 2);
+    } else if (e.kind === 'rootPlate') {
+      // 뿌리판: 흙덩이·먼지
+      const back = { x: -dir.x, z: -dir.z };
+      const col = DUST_COLORS.forest || DUST_COLORS.stubble;
+      this._dust(e.x, e.y, e.z, col, 0.8, { x: back.x * 0.5, z: back.z * 0.5 }, 16);
+      this._chips(e.x, e.y, e.z, [col[0] * 0.5, col[1] * 0.45, col[2] * 0.4], 8, 2.8, back, 0.025);
+    } else if (e.kind === 'bale') {
+      // 짚 부스러기 + 먼지
+      const back = { x: -dir.x, z: -dir.z };
+      this._chips(e.x, e.y, e.z, [0.78, 0.68, 0.42], 12, 2.6, back, 0.02);
+      this._dust(e.x, e.y, e.z, [0.62, 0.56, 0.4], 0.55, { x: back.x * 0.5, z: back.z * 0.5 }, 10);
     } else if (e.kind === 'body') {
       // 옷 먼지(절제된 표현)
       const P = this.particles;

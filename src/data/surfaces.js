@@ -38,6 +38,13 @@ export const SURFACES = {
     footstep: 'dirt',
     color: [0.55, 0.47, 0.36],
   },
+  sunflower: {
+    id: 6,
+    name: '해바라기 밭(수확 안 한 마른 줄기)',
+    speed: 0.6, // 키 큰 마른 줄기를 헤치고 지나감
+    footstep: 'weeds',
+    color: [0.4, 0.33, 0.22],
+  },
   grass: {
     id: 5,
     name: '풀밭(둑·배수로)',
@@ -47,7 +54,7 @@ export const SURFACES = {
   },
 };
 
-export const SURFACE_LIST = ['stubble', 'plowed', 'fallow', 'forest', 'road', 'grass'];
+export const SURFACE_LIST = ['stubble', 'plowed', 'fallow', 'forest', 'road', 'grass', 'sunflower'];
 
 // 덤불 속을 헤치고 지나갈 때 추가 배수
 export const SHRUB_SPEED_FACTOR = 0.45;

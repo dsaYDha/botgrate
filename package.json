@@ -8,12 +8,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:ballistics": "node tests/ballistics.test.js"
+    "test:ballistics": "node tests/ballistics.test.js",
+    "shots": "node tools/shots.mjs"
   },
   "dependencies": {
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "playwright": "^1.56.1",
     "vite": "^8.3.2"
   }
 }

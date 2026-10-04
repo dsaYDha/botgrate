@@ -104,6 +104,8 @@ export class EnemyManager {
     for (const o of q) {
       if (o.kind === 'trunk' && !o.stump && o.r0 >= 0.125) consider(o.x, o.z, o.r0, false);
       else if (o.kind === 'log') consider((o.ax + o.bx) / 2, (o.az + o.bz) / 2, o.r + 0.1, true);
+      else if (o.kind === 'bale') consider(o.x, o.z, o.r + 0.15, false);
+      else if (o.kind === 'rootPlate') consider(o.x, o.z, o.r * 0.8, false);
     }
     for (const b of WORLD.berms) {
       if (Math.hypot(b.x - e.x, b.z - e.z) < radius + b.length / 2) consider(b.x, b.z, b.width / 2, true);

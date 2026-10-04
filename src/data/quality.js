@@ -1,9 +1,16 @@
-// 그래픽 품질 프리셋. 기본 '중간' = 중급 PC 1080p 60fps 목표.
+// 그래픽 품질 프리셋. 목표: '중간' = 중급 PC 1080p 60 fps, '높음' = 같은 PC에서 60 fps 근처.
+// 그림자는 2단 캐스케이드(SunLight): shadowMapSize는 캐스케이드 하나의 크기(전체 텍스처는 가로 2배).
 export const QUALITY = {
   low: {
     pixelRatio: 0.8,
+    post: false, // HDR 후처리(블룸·색보정) 없이 바로 화면에(셰이더 안에서 톤매핑)
+    msaa: 0,
+    bloom: false,
     shadowMapSize: 1024,
+    shadowDistance: 90,
+    shadowRadius: 1.5,
     shadowExtent: 55,
+    leafShadows: false,
     grassRange: 50,
     grassDensity: 0.5,
     treeLodScale: 0.7,
@@ -12,8 +19,14 @@ export const QUALITY = {
   },
   medium: {
     pixelRatio: 1,
+    post: true,
+    msaa: 4,
+    bloom: true,
     shadowMapSize: 2048,
+    shadowDistance: 150,
+    shadowRadius: 2,
     shadowExtent: 70,
+    leafShadows: false,
     grassRange: 75,
     grassDensity: 0.8,
     treeLodScale: 1.0,
@@ -22,8 +35,14 @@ export const QUALITY = {
   },
   high: {
     pixelRatio: 1,
-    shadowMapSize: 4096,
+    post: true,
+    msaa: 4,
+    bloom: true,
+    shadowMapSize: 2048,
+    shadowDistance: 220,
+    shadowRadius: 2.5,
     shadowExtent: 90,
+    leafShadows: true,
     grassRange: 105,
     grassDensity: 1.0,
     treeLodScale: 1.35,

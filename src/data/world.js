@@ -30,7 +30,8 @@ export const WORLD = {
       to: 469,
       width: 24,
       rows: 6,
-      species: { poplar: 0.45, elm: 0.33, locust: 0.22 },
+      species: { poplar: 0.4, elm: 0.25, ash: 0.15, locust: 0.1, maple: 0.1 },
+      shrubs: { elder: 0.3, blackthorn: 0.3, rose: 0.25, oleaster: 0.15 },
       gaps: [
         [-216, -174],
         [38, 80],
@@ -48,7 +49,8 @@ export const WORLD = {
       to: 469,
       width: 20,
       rows: 5,
-      species: { locust: 0.4, elm: 0.36, poplar: 0.24 },
+      species: { locust: 0.35, elm: 0.25, poplar: 0.2, ash: 0.1, maple: 0.1 },
+      shrubs: { blackthorn: 0.35, rose: 0.3, elder: 0.2, oleaster: 0.15 },
       gaps: [
         [-216, -174],
         [176, 232],
@@ -66,7 +68,8 @@ export const WORLD = {
       to: 469,
       width: 16,
       rows: 4,
-      species: { elm: 0.5, locust: 0.35, poplar: 0.15 },
+      species: { elm: 0.45, ash: 0.2, locust: 0.2, poplar: 0.1, maple: 0.05 },
+      shrubs: { oleaster: 0.35, rose: 0.25, blackthorn: 0.25, elder: 0.15 },
       gaps: [
         [-216, -178],
         [-44, 2],
@@ -84,7 +87,8 @@ export const WORLD = {
       to: 272,
       width: 22,
       rows: 6,
-      species: { poplar: 0.4, elm: 0.38, locust: 0.22 },
+      species: { poplar: 0.35, ash: 0.25, elm: 0.2, maple: 0.1, locust: 0.1 },
+      shrubs: { elder: 0.35, rose: 0.25, blackthorn: 0.25, oleaster: 0.15 },
       gaps: [[36, 74]],
       edgeShrubDensity: 1.0,
       deadFraction: 0.07,
@@ -123,6 +127,8 @@ export const WORLD = {
   // 밭 구획. 사각형 [x0, z0, x1, z1]. type: stubble | plowed | fallow
   // dir: 이랑/그루터기 줄 방향(rad, 0 = 동서 방향으로 줄이 남)
   fields: [
+    // 수확하지 않고 말라 선 해바라기 밭 한 구획(목록 앞쪽이 우선)
+    { rect: [-128, -70, 32, 118], type: 'sunflower', dir: Math.PI / 2 },
     { rect: [-700, -85, -197, 248], type: 'plowed', dir: 0 },
     { rect: [-193, -85, 160, 248], type: 'fallow', dir: 0 },
     { rect: [160, -85, 469, 248], type: 'stubble', dir: Math.PI / 2 },

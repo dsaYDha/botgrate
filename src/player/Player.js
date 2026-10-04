@@ -6,8 +6,9 @@ import { MOVEMENT } from '../data/movement.js';
 import { SURFACES, SHRUB_SPEED_FACTOR } from '../data/surfaces.js';
 import { KEYS } from '../core/Input.js';
 import { clamp, damp, smoothstep, lerp } from '../core/math.js';
+import { stemCenterAt, stemRadiusAt } from '../world/stemShape.js';
 
-const SURF_ORDER = ['stubble', 'plowed', 'fallow', 'forest', 'grass', 'road'];
+const SURF_ORDER = ['stubble', 'plowed', 'fallow', 'forest', 'grass', 'road', 'sunflower'];
 
 export class Player {
   constructor(world, input, settings, events) {
@@ -153,7 +154,7 @@ export class Player {
     const sw = this.world.terrain.surfaceWeights(this.x, this.z);
     let sf = 0;
     let best = 0;
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < SURF_ORDER.length; k++) {
       sf += sw[k] * SURFACES[SURF_ORDER[k]].speed;
       if (sw[k] > sw[best]) best = k;
     }
@@ -301,12 +302,13 @@ export class Player {
       let moved = false;
       for (const o of out) {
         if (o.kind === 'trunk') {
-          // 몸통 높이(발 위 1 m)의 줄기 중심
-          const hb = feet + 1.0 - o.y0;
+          // 몸통 높이(발 위 0.5~1 m)의 줄기 중심·반지름(휨·뿌리 퍼짐 포함, 화면 모양과 같은 식)
           if (o.top < feet + 0.3) continue;
-          const tx = o.x + o.lx * hb;
-          const tz = o.z + o.lz * hb;
-          const rr = o.r0 * 0.9 + radius;
+          const hb = Math.min(o.top - o.y0, feet + (this.stance === 'prone' ? 0.25 : 0.8) - o.y0);
+          const c = stemCenterAt(o, hb, this._sc || (this._sc = { x: 0, z: 0 }));
+          const tx = c.x;
+          const tz = c.z;
+          const rr = stemRadiusAt(o, hb) + radius;
           const dx = nx - tx;
           const dz = nz - tz;
           const d2 = dx * dx + dz * dz;
@@ -314,6 +316,34 @@ export class Player {
             const d = Math.sqrt(d2) || 1e-4;
             nx = tx + (dx / d) * rr;
             nz = tz + (dz / d) * rr;
+            moved = true;
+          }
+        } else if (o.kind === 'bale' || o.kind === 'rootPlate') {
+          // 원형 짚 더미·뿌리판: 바닥 투영은 축 방향 폭 × 지름 직사각형
+          const ux = Math.cos(o.ang);
+          const uz = Math.sin(o.ang);
+          const dx = nx - o.x;
+          const dz = nz - o.z;
+          let a = dx * ux + dz * uz;
+          let bb = -dx * uz + dz * ux;
+          const ha = o.w * 0.5;
+          const hb = o.r;
+          const ea = a - clamp(a, -ha, ha);
+          const eb = bb - clamp(bb, -hb, hb);
+          const d = Math.hypot(ea, eb);
+          if (d < radius) {
+            if (d > 1e-4) {
+              const k = (radius - d) / d;
+              a += ea * k;
+              bb += eb * k;
+            } else {
+              const pa = ha - Math.abs(a);
+              const pb = hb - Math.abs(bb);
+              if (pa < pb) a = Math.sign(a || 1) * (ha + radius);
+              else bb = Math.sign(bb || 1) * (hb + radius);
+            }
+            nx = o.x + a * ux - bb * uz;
+            nz = o.z + a * uz + bb * ux;
             moved = true;
           }
         } else if (o.kind === 'log') {

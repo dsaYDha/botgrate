@@ -24,7 +24,7 @@ export class DebugOverlay {
     });
     events.on('bullet:impact', (e) => {
       if (e.kind === 'body') return;
-      const what = e.kind === 'ground' ? `지면(${e.surface})${e.ricochet ? ' 도탄' : ''}` : e.kind === 'trunk' ? `줄기(${e.material})${e.through ? ' 관통' : ''}` : e.kind;
+      const what = e.kind === 'ground' ? `지면(${e.surface})${e.ricochet ? ' 도탄' : ''}` : e.kind === 'trunk' ? `줄기(${e.material})${e.through ? ' 관통' : ''}` : e.kind === 'bale' ? `짚 더미${e.through ? ' 관통' : ''}` : e.kind === 'rootPlate' ? `뿌리판(흙)${e.through ? ' 관통' : ''}` : e.kind === 'log' ? `통나무(${e.material})${e.through ? ' 관통' : ''}` : e.kind;
       this.lastImpact = `${what} ${e.distance.toFixed(0)} m, ${e.speed.toFixed(0)} m/s`;
     });
   }

@@ -3,6 +3,7 @@
 // 탄은 총열 방향(조준선 + 영점 앙각)으로, 실제 총구 위치에서 나간다(크로스헤어 없음).
 
 import * as THREE from 'three';
+import { stemCenterAt, stemRadiusAt } from '../world/stemShape.js';
 import { WEAPONS } from '../data/weapons.js';
 import { AMMO } from '../data/ammo.js';
 import { ATMOSPHERE } from '../data/atmosphere.js';
@@ -596,9 +597,10 @@ export class WeaponSystem {
           const pz = start.z + dir.z * len * s;
           if (py < o.y0 || py > o.top) continue;
           const hb = py - o.y0;
-          const tx = o.x + o.lx * hb;
-          const tz = o.z + o.lz * hb;
-          const r = o.r0 + (o.r1 - o.r0) * (hb / Math.max(1, o.top - o.y0)) + 0.012;
+          const sc = stemCenterAt(o, hb, this._sc || (this._sc = { x: 0, z: 0 }));
+          const tx = sc.x;
+          const tz = sc.z;
+          const r = stemRadiusAt(o, hb) + 0.012;
           const d = Math.hypot(px - tx, pz - tz);
           if (d < r) {
             const pen = (1 - s) * len + (r - d);
@@ -609,7 +611,7 @@ export class WeaponSystem {
             break;
           }
         }
-      } else if (o.kind === 'log') {
+      } else if (o.kind === 'log' || o.kind === 'bale' || o.kind === 'limb' || o.kind === 'rootPlate') {
         for (let k = 0; k <= 8; k++) {
           const s = k / 8;
           const p = start.clone().addScaledVector(dir, len * s);
@@ -622,7 +624,7 @@ export class WeaponSystem {
           const cx = o.ax + ax * t;
           const cy = o.ay + ay * t;
           const cz = o.az + az * t;
-          const r = lerp(o.r, o.r2, t) + 0.012;
+          const r = (o.kind === 'log' ? lerp(o.r, o.r2, t) : o.r) + 0.012;
           const d = Math.hypot(p.x - cx, p.y - cy, p.z - cz);
           if (d < r) {
             const pen = (1 - s) * len + (r - d);

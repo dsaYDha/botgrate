@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { World } from '../world/World.js';
-import { Sky, SUN } from '../render/Sky.js';
+import { Sky } from '../render/Sky.js';
+import { Post } from '../render/Post.js';
 import { TerrainRenderer } from '../render/TerrainRenderer.js';
 import { TreeRenderer } from '../render/TreeRenderer.js';
 import { VegetationRenderer } from '../render/VegetationRenderer.js';
 import { DistantScenery } from '../render/DistantScenery.js';
+import { PropsRenderer } from '../render/PropsRenderer.js';
 import { baseHeight } from '../world/Terrain.js';
 import { U } from '../render/shaderLib.js';
 import { QUALITY } from '../data/quality.js';
@@ -26,6 +28,9 @@ import { EnemyManager } from '../enemies/EnemyManager.js';
 import { Effects } from '../effects/Effects.js';
 import { AudioEngine } from '../audio/AudioEngine.js';
 
+// 노출(AgX 톤매핑 전 곱). 하늘 모델의 렌더 단위에 맞춘 값
+const EXPOSURE = 1.05;
+
 export class Game {
   constructor(container, progress) {
     this.container = container;
@@ -46,21 +51,23 @@ export class Game {
       this.progress(msg);
       await new Promise((r) => setTimeout(r, 0));
     };
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // 후처리를 쓰면 MSAA는 HDR 렌더 타깃에서 하므로 화면 버퍼는 단일 샘플
+    const renderer = new THREE.WebGLRenderer({ antialias: !this.quality.post, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1) * this.quality.pixelRatio);
     // 표시 크기는 CSS(화면 가득)가 정하고, 그리기 버퍼만 맞춘다(틀 크기가 바뀌어도 빈 공간이 생기지 않게)
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     this._vw = window.innerWidth;
     this._vh = window.innerHeight;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.92;
+    renderer.toneMapping = THREE.AgXToneMapping;
+    renderer.toneMappingExposure = EXPOSURE;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.autoClear = false;
     renderer.info.autoReset = false;
     this.container.appendChild(renderer.domElement);
     this.renderer = renderer;
+    this.post = new Post(renderer, this.quality);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(this.settings.get('fov'), window.innerWidth / window.innerHeight, 0.12, 30000);
@@ -74,18 +81,14 @@ export class Game {
 
     await step('하늘과 지형을 준비하는 중…');
     this.sky = new Sky(this.scene, this.quality);
+    this.sky.setupWeaponScene(renderer, this.weaponScene);
     this.terrainRenderer = new TerrainRenderer(this.scene, this.quality.terrainLevels);
+    this.propsRenderer = new PropsRenderer(this.scene, this.world, this.terrainRenderer.groundTex);
     await step('나무를 심는 중…');
-    this.trees = new TreeRenderer(this.scene, this.world, this.quality);
-    this.sky.sun.shadow.camera.layers.enable(1);
+    this.trees = new TreeRenderer(this.scene, this.world, this.quality, renderer);
     this.vegetation = new VegetationRenderer(this.scene, this.quality);
     this.distant = new DistantScenery(this.scene, (x, z) => baseHeight(x, z, this.world.data.terrain));
 
-    // 무기 장면 조명(본 장면과 같은 태양·하늘빛)
-    const wsun = new THREE.DirectionalLight(SUN.color, SUN.intensity);
-    wsun.position.copy(this.sky.dir);
-    this.weaponScene.add(wsun);
-    this.weaponScene.add(new THREE.HemisphereLight(SUN.skyColor, SUN.groundColor, SUN.hemiIntensity));
 
     await step('사수와 소총을 준비하는 중…');
     this.input = new Input(renderer.domElement);
@@ -182,6 +185,7 @@ export class Game {
     this.last = performance.now();
     const loop = (t) => {
       requestAnimationFrame(loop);
+      if (this.frozen) return; // 스크린샷 도구가 프레임을 직접 그릴 때
       const dt = Math.min(0.05, Math.max(0, (t - this.last) / 1000));
       this.last = t;
       if (!this.paused) this.update(dt);
@@ -271,7 +275,7 @@ export class Game {
     this.effects.update(dt, this.time);
 
     // 렌더 준비
-    this.sky.update(this.eyePos);
+    this.sky.update(this.eyePos, dt, this.world.wind);
     this.terrainRenderer.update(cam.position);
     this.trees.update(cam, this.zoom, this.eyePos, this.sky.shadowExtent);
     this.vegetation.update(cam, this.zoom);
@@ -308,12 +312,14 @@ export class Game {
     if (window.innerWidth !== this._vw || window.innerHeight !== this._vh) this.onResize();
     const r = this.renderer;
     r.info.reset();
+    r.setRenderTarget(this.post.target);
     r.clear();
     r.render(this.scene, this.camera);
     if (this.weaponModel.root.visible) {
       r.clearDepth();
       r.render(this.weaponScene, this.weaponCamera);
     }
+    this.post.finish();
   }
 
   onResize() {
@@ -327,5 +333,7 @@ export class Game {
     this.weaponCamera.aspect = w / h;
     this.weaponCamera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.post.setSize(size.x, size.y);
   }
 }

@@ -4,7 +4,8 @@
 // 재질별 관통·편향은 data/materials.js. 사수(shooter)와 무관하게 동작 → 2단계 적 사격도 같은 경로.
 
 import { BallisticModel, earthOmegaWorld, spinDriftAccelCoeff } from './ballistics.js';
-import { segTrunk, segCylinder, segEllipsoid, pointSegDistance } from './intersect.js';
+import { segStem, segCylinder, segEllipsoid, segCappedCylinder, pointSegDistance } from './intersect.js';
+import { coverAt, makeCoverSample, COVER_KINDS } from '../world/GroundCover.js';
 import { MATERIALS } from '../data/materials.js';
 import { ATMOSPHERE } from '../data/atmosphere.js';
 import { rng } from '../core/Random.js';
@@ -141,11 +142,17 @@ export class BulletSystem {
     for (let k = 0; k < q.length; k++) {
       const o = q[k];
       if (o.kind === 'trunk') {
-        if (segTrunk(x0, y0, z0, dx, dy, dz, o, h)) hits.push({ t0: h.t0, t1: h.t1, nx: h.nx, ny: h.ny, nz: h.nz, kind: 'trunk', obj: o, material: o.material });
+        if (segStem(x0, y0, z0, dx, dy, dz, o, h)) hits.push({ t0: h.t0, t1: h.t1, nx: h.nx, ny: h.ny, nz: h.nz, kind: 'trunk', obj: o, material: o.material });
+      } else if (o.kind === 'limb') {
+        if (segCappedCylinder(x0, y0, z0, dx, dy, dz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, o.r, h))
+          hits.push({ t0: h.t0, t1: h.t1, nx: h.nx, ny: h.ny, nz: h.nz, kind: 'trunk', obj: o, material: o.material });
       } else if (o.kind === 'log') {
         const r = (o.r + o.r2) * 0.5;
         if (segCylinder(x0, y0, z0, dx, dy, dz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, r, h))
           hits.push({ t0: h.t0, t1: h.t1, nx: h.nx, ny: h.ny, nz: h.nz, kind: 'log', obj: o, material: o.material });
+      } else if (o.kind === 'bale' || o.kind === 'rootPlate') {
+        if (segCappedCylinder(x0, y0, z0, dx, dy, dz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, o.r, h))
+          hits.push({ t0: h.t0, t1: h.t1, nx: h.nx, ny: h.ny, nz: h.nz, kind: o.kind, obj: o, material: o.material });
       } else if (o.kind === 'foliage') {
         if (segEllipsoid(x0, y0, z0, dx, dy, dz, o.cx, o.cy, o.cz, o.rx, o.ry, o.rz, h))
           hits.push({ t0: Math.max(0, h.t0), t1: h.t1, kind: 'volume', obj: o, material: o.material });
@@ -169,6 +176,8 @@ export class BulletSystem {
       }
     }
     if (groundT >= 0) hits.push({ t0: groundT, t1: groundT, kind: 'ground', material: 'soil' });
+    // 지면 식생 덮개(그루터기·잡초·해바라기): 낮게 나는 탄만
+    if (Math.min(y0 - gy0, b.y - gy1) < 2.3) this._cover(b, x0, y0, z0, dx, dy, dz, segLen, gy0, gy1, groundT);
 
     // 근탄(제압) 통지
     if (this.nearMissProvider) this.nearMissProvider(b, x0, y0, z0, dx, dy, dz);
@@ -206,6 +215,56 @@ export class BulletSystem {
       break;
     }
     this._checkEnd(b);
+  }
+
+  /** 덮개 속을 지난 길이만큼 줄기 타격(포아송)으로 꺾고 느리게. 화면의 풀·잡초 높이와 같은 식(GroundCover). */
+  _cover(b, x0, y0, z0, dx, dy, dz, segLen, gy0, gy1, groundT) {
+    const t = this.world.terrain;
+    const c = this._coverS || (this._coverS = makeCoverSample());
+    const tEnd = groundT >= 0 ? groundT : 1;
+    const n = Math.max(1, Math.ceil((segLen * tEnd) / 0.3));
+    const L = [0, 0, 0];
+    for (let k = 0; k < n; k++) {
+      const tm = ((k + 0.5) / n) * tEnd;
+      const px = x0 + dx * tm;
+      const py = y0 + dy * tm;
+      const pz = z0 + dz * tm;
+      const gy = gy0 + (gy1 - gy0) * tm;
+      if (py - gy > 2.3) continue;
+      coverAt(t, px, pz, c);
+      if (py - gy >= c.h) continue;
+      const dl = (segLen * tEnd) / n;
+      for (let q = 0; q < 3; q++) L[q] += dl * c.k[q];
+    }
+    let sp = this._speed(b);
+    let ang = 0;
+    let strikes = 0;
+    let mat = null;
+    for (let q = 0; q < 3; q++) {
+      if (L[q] <= 0) continue;
+      const m = MATERIALS[COVER_KINDS[q]];
+      sp *= Math.exp(-m.lossPerMeter * L[q]);
+      const lambda = m.twigRatePerMeter * L[q];
+      let p = Math.exp(-lambda);
+      let r = rng.next();
+      let s = 0;
+      while (r > p && s < 6) {
+        s++;
+        r -= p;
+        p *= lambda / s;
+      }
+      for (let i = 0; i < s; i++) {
+        ang += Math.abs(rng.gauss()) * m.twigDeflectDeg * DEG;
+        sp *= 1 - m.twigSpeedLoss * (0.5 + rng.next());
+      }
+      if (s > 0) mat = COVER_KINDS[q];
+      strikes += s;
+    }
+    if (ang > 0 || sp !== this._speed(b)) this._deflect(b, ang, sp);
+    if (strikes > 0 && mat !== 'stubbleCover' && b.lastCoverFx !== this.stats.steps) {
+      b.lastCoverFx = this.stats.steps;
+      this.events.emit('bullet:foliage', { x: b.x, y: b.y, z: b.z, material: mat, speed: sp, strikes, shooter: b.shooter });
+    }
   }
 
   _groundBisect(x0, y0, z0, dx, dy, dz, a, c) {

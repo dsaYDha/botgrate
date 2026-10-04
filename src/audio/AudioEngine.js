@@ -293,6 +293,11 @@ export class AudioEngine {
       if (e.ricochet) this.propagate(this._pick(b.ricochet), e, { gain: 2.0, ref: 2, reverb: 0.2, rate: 0.9 + rng.next() * 0.2 });
     } else if (e.kind === 'trunk' || e.kind === 'log') {
       this.propagate(this._pick(b.wood), e, { gain: 3.0, ref: 1.5, reverb: 0.35 });
+    } else if (e.kind === 'rootPlate') {
+      this.propagate(this._pick(b.dirt), e, { gain: 2.2, ref: 1.5, reverb: 0.3 });
+    } else if (e.kind === 'bale') {
+      // 짚 더미: 둔하고 짧은 소리
+      this.propagate(this._pick(b.dirt), e, { gain: 1.8, ref: 1.5, reverb: 0.2, rate: 0.8 });
     } else if (e.kind === 'body') {
       // 명중음: 둔탁한 타격음(거리만큼 늦게 도착)
       this.propagate(this._pick(b.body), e, { gain: 4.5, ref: 1.5, reverb: 0.3 });

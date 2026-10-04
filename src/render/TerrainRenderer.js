@@ -1,33 +1,59 @@
 // 지형 렌더링: 카메라 중심 기하 클립맵(동심 격자 링, 수준마다 간격 2배).
-// 정점 높이는 GPU에서 CPU와 같은 함수(terrainHeight)로 계산한다.
+// 정점 높이는 GPU에서 CPU와 같은 함수(3차 B-스플라인 + 바퀴 자국 + 미세 요철)로 계산한다.
 // 수준 경계는 CDLOD식 모프로 이어 붙이고, 겹치는 띠는 안쪽 수준이 덮는 영역을 discard.
+// 지면 색·질감: 절차 생성 배열 텍스처(groundTextures.js)를 지면 종류 지도에 따라 섞는다.
+//   그루터기 줄(17 cm 간격)·짚 줄(콤바인 폭 7.6 m)·트랙터 바퀴 자국(24 m)·밭 끝 회전 구역,
+//   갈아엎은 이랑과 습한 곳, 숲 바닥 낙엽층, 흙길 바퀴 자국·마른 웅덩이 자리, 경사면 흙 노출.
 
 import * as THREE from 'three';
 import { U, patchMaterial } from './shaderLib.js';
+import { makeGroundTextures, GROUND_TILE } from './groundTextures.js';
 
 const M = 64; // 수준당 반격자 칸 수(전체 2M × 2M 칸)
 
 const GROUND_GLSL = /* glsl */ `
-uniform sampler2D uSurfA;
-uniform sampler2D uSurfB;
+uniform highp sampler2DArray uGroundAlb;
+uniform highp sampler2DArray uGroundNrm;
 uniform vec4 uLevel;   // centerX, centerZ, spacing, isLast
 uniform vec4 uInner;   // 안쪽 수준이 덮는 사각형
 varying float vSpacing;
+varying vec3 vMacroN;
 
-vec4 surfSample(sampler2D t, vec2 p) {
-  float N = uTerrainInfo.z;
-  vec2 uv = ((p + uTerrainInfo.x) / uTerrainInfo.y + 0.5) / N;
-  return texture(t, uv);
+const float TILE_SIZE[8] = float[8](${GROUND_TILE.map((t) => t.toFixed(2)).join(', ')});
+
+// 값 노이즈와 그 미분(같은 해시)
+vec3 vnoiseD(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 du = 6.0 * f * (1.0 - f);
+  ivec2 c = ivec2(i);
+  float a = hash2i(c), b = hash2i(c + ivec2(1, 0)), d = hash2i(c + ivec2(0, 1)), e = hash2i(c + ivec2(1, 1));
+  float k = a - b - d + e;
+  return vec3(a + (b - a) * u.x + (d - a) * u.y + k * u.x * u.y, du.x * ((b - a) + k * u.y), du.y * ((d - a) + k * u.x));
+}
+// 미세 요철 기울기(microReliefW의 해석적 미분). 이랑은 화면에서 표현 못할 만큼 멀면 줄인다.
+vec2 microGrad(vec2 p, vec4 sa, float dir, float furrowFade) {
+  vec3 n1 = vnoiseD(p * 0.9 + vec2(13.1, 7.7)); n1.yz *= 0.9;
+  vec3 n2 = vnoiseD(p * 2.6 + vec2(-4.3, 9.1)); n2.yz *= 2.6;
+  vec3 nf = vnoiseD(p * 0.45 + vec2(3.3)); nf.yz *= 0.45;
+  vec2 gGen = n1.yz * 0.035 + n2.yz * 0.014;
+  vec2 gFor = nf.yz * 0.09 + n2.yz * 0.02;
+  vec2 rowN = vec2(-sin(dir), cos(dir));
+  float q = dot(p, rowN);
+  vec2 gFur = -sin(6.2831853 * q / 0.75) * (6.2831853 / 0.75) * 0.045 * rowN * furrowFade + n1.yz * 0.02;
+  float wGen = max(0.0, 1.0 - sa.g - sa.a);
+  return gGen * wGen + gFor * sa.a + gFur * sa.g;
 }
 
 // 플레이 지도 밖 원경 밭 구획
-void farFields(vec2 p, out vec4 a, out vec4 b) {
+void farFields(vec2 p, out vec4 a, out vec4 b, out vec4 c) {
   vec2 cell = floor(p / vec2(420.0, 300.0));
   float h = hash2i(ivec2(cell) + ivec2(91, 37));
   a = vec4(0.0);
-  b = vec4(0.0, hash2i(ivec2(cell) + ivec2(5, 3)) > 0.5 ? 0.5 : 0.0, h, 0.0);
+  b = vec4(0.0, 0.0, 0.25, 0.0);
+  c = vec4(hash2i(ivec2(cell) + ivec2(5, 3)) > 0.5 ? 0.5 : 0.0, h, 0.0, 1.0);
   if (h < 0.42) a.r = 1.0; else if (h < 0.72) a.g = 1.0; else a.b = 1.0;
-  // 구획 경계의 풀둑
   vec2 f = fract(p / vec2(420.0, 300.0));
   vec2 e = min(f, 1.0 - f) * vec2(420.0, 300.0);
   float edge = 1.0 - smoothstep(2.0, 5.0, min(e.x, e.y));
@@ -35,99 +61,171 @@ void farFields(vec2 p, out vec4 a, out vec4 b) {
   b.r = edge;
 }
 
-float stripeAA(float q, float period, float fw) {
-  float s = 0.5 + 0.5 * cos(6.2831853 * q / period);
-  return mix(s, 0.5, smoothstep(0.25, 0.7, fw / period));
+mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+
+// 한 층을 반복이 덜 보이게 두 번(다른 회전·크기) 표본해 섞는다. 법선은 월드 xz 기울기로 돌려준다.
+void layerAdd(int layer, vec2 p, float ang, float w, float pick, inout vec3 alb, inout vec2 grad, inout float cav, inout float wsum) {
+  if (w < 0.004) return;
+  float t = TILE_SIZE[layer];
+  mat2 R1 = rot2(ang);
+  mat2 R2 = rot2(ang + 1.9 + float(layer));
+  vec2 uv1 = (R1 * p) / t;
+  vec2 uv2 = (R2 * p) / (t * 1.17) + vec2(0.37, 0.71);
+  vec4 a1 = texture(uGroundAlb, vec3(uv1, float(layer)));
+  vec4 a2 = texture(uGroundAlb, vec3(uv2, float(layer)));
+  vec4 n1 = texture(uGroundNrm, vec3(uv1, float(layer)));
+  vec4 n2 = texture(uGroundNrm, vec3(uv2, float(layer)));
+  // 높이 기반 섞기: 높은 쪽이 보이게
+  float b = clamp(pick + (a2.a - a1.a) * 0.6, 0.0, 1.0);
+  vec4 a = mix(a1, a2, b);
+  vec2 t1 = n1.rg * 2.0 - 1.0;
+  vec2 t2 = n2.rg * 2.0 - 1.0;
+  // 텍스처 공간 기울기 → 월드 xz (회전의 역)
+  vec2 g1 = transpose(R1) * t1;
+  vec2 g2 = transpose(R2) * t2;
+  alb += a.rgb * w;
+  grad += mix(g1, g2, b) * w;
+  cav += mix(n1.b, n2.b, b) * w;
+  wsum += w;
 }
 
-vec3 groundAlbedo(vec3 wp, inout vec3 nW) {
+vec3 groundShade(vec3 wp, vec3 macroN, out vec3 nW, out float cavity) {
   vec2 p = wp.xz;
-  vec4 a, b;
-  float inMap = step(abs(p.x), uTerrainInfo.x - 1.0) * step(abs(p.y), uTerrainInfo.x - 1.0);
-  if (inMap > 0.5) { a = surfSample(uSurfA, p); b = surfSample(uSurfB, p); }
-  else farFields(p, a, b);
-  float wStub = a.r, wPlow = a.g, wFal = a.b, wFor = a.a, wGrass = b.r;
-  float dir = b.g * 3.14159265;
-  float seed = b.b;
-  vec2 rowN = vec2(-sin(dir), cos(dir));
-  float q = dot(p, rowN);
-  float fw = max(fwidth(q), 1e-4);
+  vec4 sa, sb, sc;
+  bool inMap = inTerrainMap(p);
+  float roadD = 1000.0;
+  if (inMap) {
+    sa = surfSampleA(p);
+    sb = surfSampleB(p);
+    sc = surfSampleC(p);
+    roadD = terrainHD(p).y;
+  } else farFields(p, sa, sb, sc);
+  float ard = abs(roadD);
+  float roadW = inMap ? smoothstep(1.85, 1.45, ard) : 0.0;
+  float keep = 1.0 - roadW;
+  float wStub = sa.r * keep, wPlow = sa.g * keep, wFal = sa.b * keep, wFor = sa.a * keep;
+  float wGrass = sb.r * keep, wSun = sb.g * keep, wet = sb.b;
+  float dir = sc.r * 3.14159265;
+  float seed = sc.g;
+  float headland = sc.b;
   float dist = length(wp - cameraPosition);
 
-  float n1 = vnoise(p * 0.35);
-  float n2 = vnoise(p * 1.7 + 3.1);
-  float n3 = vnoise(p * 7.3 - 1.7);
-  float tint = (seed - 0.5) * 0.08;
+  vec2 rT = vec2(cos(dir), sin(dir));
+  vec2 rN = vec2(-rT.y, rT.x);
+  float q = dot(p, rN);
+  float along = dot(p, rT);
+  float fq = fwidth(q);
+  float rowAng = -dir; // 텍스처 x축 = 줄 방향
 
-  // 밀 그루터기: 줄 방향 그루터기 열 + 짚 부스러기 띠
-  float rows = stripeAA(q, 0.18, fw);
-  float windrow = smoothstep(0.55, 0.95, 0.5 + 0.5 * cos(6.2831853 * q / 6.2));
-  vec3 straw = vec3(0.56, 0.47, 0.29) * (1.0 + tint);
-  vec3 soilDry = vec3(0.36, 0.3, 0.21);
-  vec3 cStub = mix(soilDry, straw, 0.55 + 0.2 * rows + 0.15 * windrow);
-  cStub *= 0.86 + 0.22 * n1 + 0.1 * n2;
+  // 경사면: 풀·그루터기가 벗겨지고 흙이 드러남(둔덕·배수로 둑)
+  float slope = 1.0 - macroN.y;
+  float exposed = smoothstep(0.1, 0.26, slope + (vnoise(p * 0.7) - 0.5) * 0.08);
 
-  // 갈아엎은 흙: 이랑 + 흙덩이
-  float ph = q / 0.78;
-  float furrow = sin(6.2831853 * ph);
-  float fade = 1.0 - smoothstep(0.15, 0.5, fw / 0.78);
-  vec3 soil = vec3(0.3, 0.235, 0.175) * (1.0 + tint);
-  vec3 cPlow = soil * (0.82 + 0.25 * n2 + 0.18 * n3) * (1.0 + 0.16 * furrow * fade);
-  cPlow = mix(cPlow, soil * 1.25, smoothstep(0.62, 0.8, n1) * 0.4);
+  float pickN = smoothstep(0.3, 0.7, vnoise(p * 0.13 + seed * 17.0));
+  float n1 = vnoise(p * 0.21 + 3.0);
+  float n2 = vnoise(p * 0.77 - 5.0);
 
-  // 휴경지: 마른 풀·초록·갈색 얼룩
-  // 잡초 덮인 땅: 멀리서 보면 잡초 색의 평균(어두운 황록·갈색)
-  vec3 cFal = mix(vec3(0.27, 0.25, 0.14), vec3(0.17, 0.2, 0.08), smoothstep(0.35, 0.7, n1));
-  cFal = mix(cFal, vec3(0.33, 0.28, 0.16), smoothstep(0.6, 0.85, n2) * 0.6);
-  cFal *= 0.85 + 0.25 * n3;
+  vec3 alb = vec3(0.0);
+  vec2 grad = vec2(0.0);
+  float cav = 0.0;
+  float ws = 0.0;
 
-  // 숲 바닥: 낙엽(일부 노란 잎), 축축한 그늘
-  float leafSpeck = smoothstep(0.62, 0.78, vnoise(p * 5.1)) * (1.0 - smoothstep(30.0, 90.0, dist));
-  vec3 cFor = vec3(0.3, 0.235, 0.15) * (0.75 + 0.35 * n2 + 0.2 * n3);
-  cFor = mix(cFor, vec3(0.62, 0.5, 0.2), leafSpeck * 0.55);
-  cFor = mix(cFor, vec3(0.2, 0.17, 0.12), smoothstep(0.55, 0.8, n1) * 0.35);
-
-  // 풀둑·배수로
-  vec3 cGrass = mix(vec3(0.2, 0.25, 0.11), vec3(0.34, 0.33, 0.19), smoothstep(0.3, 0.9, n2) * 0.7);
-  cGrass *= 0.88 + 0.18 * n3;
-
-  float wsum = max(wStub + wPlow + wFal + wFor + wGrass, 1e-3);
-  vec3 col = (cStub * wStub + cPlow * wPlow + cFal * wFal + cFor * wFor + cGrass * wGrass) / wsum;
-
-  // 이랑 법선(가까이서만)
-  nW = normalize(nW + vec3(rowN.x, 0.0, rowN.y) * cos(6.2831853 * ph) * 0.45 * wPlow * fade);
-  // 흙덩이 요철
-  float bump = (vnoise(p * 9.0) - 0.5) * 0.25 * (wPlow + wFor * 0.5) * (1.0 - smoothstep(10.0, 40.0, dist));
-  nW = normalize(nW + vec3(bump, 0.0, -bump));
-
-  // 흙길
-  if (inMap > 0.5) {
-    float rd = terrainHD(p).y;
-    float ard = abs(rd);
-    float roadW = smoothstep(1.85, 1.45, ard);
-    if (roadW > 0.0) {
-      vec3 dirt = vec3(0.56, 0.48, 0.37) * (0.9 + 0.15 * n2 + 0.08 * n3);
-      float rutC = 1.0 - smoothstep(0.08, 0.2, abs(ard - uRut.x * 0.5));
-      dirt = mix(dirt, vec3(0.43, 0.36, 0.28), rutC * 0.7);
-      float center = 1.0 - smoothstep(0.25, 0.42, ard);
-      dirt = mix(dirt, vec3(0.37, 0.39, 0.21) * (0.85 + 0.3 * n3), center * smoothstep(0.3, 0.6, n2 + 0.2));
-      col = mix(col, dirt, roadW);
-    }
+  // --- 그루터기 밭 ---
+  if (wStub > 0.004) {
+    float noHead = 1.0 - headland;
+    // 짚 줄: 콤바인 작업 폭 7.6 m마다 폭 약 1.6 m, 가장자리 들쭉날쭉, 군데군데 끊김
+    float qs = mod(q + seed * 61.0, 7.6);
+    float e = abs(qs - 3.8) + (vnoise(vec2(along * 0.35, seed * 13.0 + q * 0.05)) - 0.5) * 0.6;
+    float swath = (1.0 - smoothstep(0.55, 0.95, e)) * smoothstep(0.22, 0.42, vnoise(vec2(along * 0.045, q * 0.09 + 7.0))) * noHead;
+    swath *= 1.0 - smoothstep(0.6, 2.0, fq);
+    // 트랙터 바퀴 자국(방제기 폭 24 m, 바퀴 간격 1.8 m, 자국 폭 45 cm)
+    float qt = mod(q + seed * 97.0, 24.0) - 12.0;
+    float td = min(abs(qt - 0.9), abs(qt + 0.9));
+    float track = (1.0 - smoothstep(0.17, 0.3, td)) * noHead * (1.0 - smoothstep(0.25, 0.7, fq));
+    float soilPatch = smoothstep(0.62, 0.85, n2) * 0.5 + track * 0.8;
+    float stubW = wStub * (1.0 - swath * 0.75) * (1.0 - soilPatch);
+    layerAdd(4, p, rowAng, stubW, 0.0, alb, grad, cav, ws);
+    layerAdd(3, p, rowAng, wStub * swath * 0.75, pickN, alb, grad, cav, ws);
+    layerAdd(0, p, 0.0, wStub * soilPatch * (1.0 - swath * 0.75), pickN, alb, grad, cav, ws);
   }
-  return col;
+  // --- 갈아엎은 흙밭 ---
+  if (wPlow > 0.004) {
+    layerAdd(1, p, rowAng, wPlow * 0.8, pickN, alb, grad, cav, ws);
+    layerAdd(0, p, 0.5, wPlow * 0.2, pickN, alb, grad, cav, ws);
+  }
+  // --- 휴경지(잡초 밑): 마른 풀·이끼·흙 얼룩 ---
+  if (wFal > 0.004) {
+    float m = smoothstep(0.35, 0.75, n1);
+    layerAdd(3, p, 0.3, wFal * (0.65 - 0.3 * m), pickN, alb, grad, cav, ws);
+    layerAdd(5, p, 1.1, wFal * (0.15 + 0.3 * m), pickN, alb, grad, cav, ws);
+    layerAdd(0, p, 2.0, wFal * 0.2, pickN, alb, grad, cav, ws);
+  }
+  // --- 숲 바닥: 낙엽층 + 맨흙 + 이끼 낀 곳 ---
+  if (wFor > 0.004) {
+    float bare = smoothstep(0.62, 0.82, n2) * 0.5;
+    float moss = smoothstep(0.7, 0.9, vnoise(p * 0.33 + 9.0)) * 0.45;
+    layerAdd(2, p, 0.0, wFor * (1.0 - bare - moss), pickN, alb, grad, cav, ws);
+    layerAdd(0, p, 1.3, wFor * bare, pickN, alb, grad, cav, ws);
+    layerAdd(5, p, 2.1, wFor * moss, pickN, alb, grad, cav, ws);
+  }
+  // --- 둑·배수로 풀밭 ---
+  if (wGrass > 0.004) {
+    float dry = smoothstep(0.3, 0.8, n1) * (1.0 - wet * 0.6);
+    layerAdd(5, p, 0.7, wGrass * (1.0 - dry * 0.6), pickN, alb, grad, cav, ws);
+    layerAdd(3, p, 2.4, wGrass * dry * 0.6, pickN, alb, grad, cav, ws);
+  }
+  // --- 해바라기 밭: 마른 흙 + 떨어진 잎 ---
+  if (wSun > 0.004) {
+    layerAdd(0, p, rowAng, wSun * 0.6, pickN, alb, grad, cav, ws);
+    layerAdd(2, p, 0.9, wSun * 0.25, pickN, alb, grad, cav, ws);
+    layerAdd(3, p, 1.7, wSun * 0.15, pickN, alb, grad, cav, ws);
+  }
+  // --- 흙길: 바퀴 자국은 다져져 어둡고, 낮은 곳엔 마른 웅덩이 자리, 가운데 풀 ---
+  if (roadW > 0.004) {
+    float rut = 1.0 - smoothstep(0.1, 0.24, abs(ard - uRut.x * 0.5));
+    float puddle = rut * smoothstep(0.55, 0.75, vnoise(vec2(dot(p, vec2(0.13, 0.11)), roadD * 0.5 + 3.0)));
+    float center = (1.0 - smoothstep(0.24, 0.42, ard)) * smoothstep(0.35, 0.6, n2 + 0.2);
+    layerAdd(7, p, 0.0, roadW * (1.0 - puddle - center * 0.8), pickN, alb, grad, cav, ws);
+    layerAdd(6, p, 0.4, roadW * puddle, 0.0, alb, grad, cav, ws);
+    layerAdd(5, p, 1.0, roadW * center * 0.8, pickN, alb, grad, cav, ws);
+  }
+  if (ws < 1e-3) layerAdd(0, p, 0.0, 1.0, pickN, alb, grad, cav, ws);
+  alb /= ws;
+  grad /= ws;
+  cav /= ws;
+
+  // 경사면 흙
+  if (exposed > 0.01 && wFor < 0.5 && roadW < 0.5) {
+    vec3 a0 = vec3(0.0); vec2 g0 = vec2(0.0); float c0 = 0.0; float w0 = 0.0;
+    layerAdd(0, p, 0.8, 1.0, pickN, a0, g0, c0, w0);
+    alb = mix(alb, a0, exposed);
+    grad = mix(grad, g0, exposed);
+    cav = mix(cav, c0, exposed);
+  }
+
+  // 습한 흙은 어둡다(갈아엎은 밭 낮은 곳)
+  alb *= 1.0 - wet * (wPlow * 0.38 + wSun * 0.2 + wStub * 0.12);
+  // 큰 규모 밝기·색 변화(타일 반복과 단조로움을 숨김)
+  float big = vnoise(p * 0.013 + seed * 7.0) * 0.6 + vnoise(p * 0.041 - seed * 3.0) * 0.4;
+  alb *= 0.86 + 0.28 * big;
+  alb *= vec3(1.0 + (seed - 0.5) * 0.06, 1.0, 1.0 - (seed - 0.5) * 0.08);
+  alb *= mix(0.78, 1.0, cav);
+
+  // 법선: 거시(정점) + 미세 요철(해석적) + 질감
+  float furrowFade = 1.0 - smoothstep(0.08, 0.25, fq);
+  vec2 mg = inMap ? microGrad(p, sa, dir, furrowFade) : vec2(0.0);
+  vec2 tg = grad * 0.55;
+  nW = normalize(macroN + vec3(-mg.x + tg.x, 0.0, -mg.y + tg.y));
+  cavity = cav;
+  return alb;
 }
 `;
 
 function makeLevelGeometry(level) {
   const n = 2 * M + 1;
-  const pos = new Float32Array(n * n * 3);
-  let k = 0;
+  const pos = [];
   for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      pos[k++] = i - M;
-      pos[k++] = 0;
-      pos[k++] = j - M;
-    }
+    for (let i = 0; i < n; i++) pos.push(i - M, 0, j - M);
   }
   const idx = [];
   const h0 = M / 2 + 1;
@@ -144,8 +242,25 @@ function makeLevelGeometry(level) {
       else idx.push(a, c, d, a, d, b);
     }
   }
+  // 바깥 테두리 스커트: 테두리 정점을 아래로 늘어뜨린 띠(y = 1 표시). 바깥 수준과의 이음매에 생기는
+  // 한 화소짜리 틈(하늘이 비치는 흰 점선)을 막는다.
+  const ring = [];
+  for (let i = 0; i < 2 * M; i++) ring.push(i); // 아래 변(j = 0)
+  for (let j = 0; j < 2 * M; j++) ring.push(j * n + 2 * M); // 오른쪽 변
+  for (let i = 2 * M; i > 0; i--) ring.push(2 * M * n + i); // 위 변
+  for (let j = 2 * M; j > 0; j--) ring.push(j * n); // 왼쪽 변
+  const base = pos.length / 3;
+  for (const v of ring) pos.push(pos[v * 3], 1, pos[v * 3 + 2]);
+  const R = ring.length;
+  for (let k = 0; k < R; k++) {
+    const a = ring[k];
+    const b = ring[(k + 1) % R];
+    const as = base + k;
+    const bs = base + ((k + 1) % R);
+    idx.push(a, as, b, b, as, bs, a, b, as, b, bs, as);
+  }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
   return g;
@@ -155,11 +270,13 @@ export class TerrainRenderer {
   constructor(scene, levels = 10, baseSpacing = 0.25) {
     this.levels = [];
     this.base = baseSpacing;
+    const tex = makeGroundTextures(512);
+    this.groundTex = tex;
     for (let L = 0; L < levels; L++) {
       const spacing = baseSpacing * Math.pow(2, L);
       const uniforms = {
-        uSurfA: U.uSurfA,
-        uSurfB: U.uSurfB,
+        uGroundAlb: { value: tex.albedo },
+        uGroundNrm: { value: tex.normal },
         uLevel: { value: new THREE.Vector4(0, 0, spacing, L === levels - 1 ? 1 : 0) },
         uInner: { value: new THREE.Vector4(1, 1, -1, -1) },
       };
@@ -175,15 +292,17 @@ export class TerrainRenderer {
           float k = uLevel.w > 0.5 ? 0.0 : smoothstep(0.8, 0.96, cheb);
           g -= mod(g, 2.0) * k;
           vec2 wpos = uLevel.xy + g * uLevel.z;
-          vec3 transformed = vec3(wpos.x, terrainHeight(wpos), wpos.y);
+          vec3 transformed = vec3(wpos.x, terrainHeightVis(wpos) - position.y * (0.15 + uLevel.z * 0.8), wpos.y);
           vSpacing = uLevel.z;
+          vMacroN = terrainNormal(wpos, max(0.5, uLevel.z * 0.9));
         `,
-        vertexHeader: 'uniform vec4 uLevel;\nvarying float vSpacing;',
+        vertexHeader: 'uniform vec4 uLevel;\nvarying float vSpacing;\nvarying vec3 vMacroN;',
         beginNormal: 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);',
         fragmentColor: /* glsl */ `
           if (vWP.x > uInner.x && vWP.x < uInner.z && vWP.z > uInner.y && vWP.z < uInner.w) discard;
-          vec3 nW = terrainNormal(vWP.xz, max(0.3, vSpacing * 0.75));
-          diffuseColor.rgb = groundAlbedo(vWP, nW);
+          vec3 nW;
+          float groundCav;
+          diffuseColor.rgb = groundShade(vWP, normalize(vMacroN), nW, groundCav);
           vec3 groundNormalView = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
         `,
         normal: 'normal = groundNormalView;',
@@ -212,7 +331,8 @@ export class TerrainRenderer {
     }
     for (let L = 1; L < this.levels.length; L++) {
       const inner = this.levels[L - 1];
-      const ext = M * inner.spacing - 1e-3;
+      // 안쪽 수준과 한 칸 겹치게(겹친 띠는 안쪽 수준이 완전히 모프돼 같은 면) — 잘라내기 경계의 틈 방지
+      const ext = (M - 1) * inner.spacing;
       this.levels[L].uniforms.uInner.value.set(inner.cx - ext, inner.cz - ext, inner.cx + ext, inner.cz + ext);
     }
   }
