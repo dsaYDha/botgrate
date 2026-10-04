@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>방풍림 전투</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <canvas id="optic"></canvas>
+    <div id="toast"></div>
+    <pre id="debug" class="hidden"></pre>
+
+    <div id="loading">
+      <div class="title">방풍림 전투</div>
+      <div id="loading-text">전장을 만드는 중…</div>
+    </div>
+
+    <div id="menu" class="hidden">
+      <div class="panel">
+        <h1>방풍림 전투 <span class="stage">1단계 — 전장 기반 + 사격 핵심</span></h1>
+        <p class="lead">
+          초가을 오후, 평원의 방풍림 지대. 남쪽 숲띠 가장자리에서 북쪽을 바라보고 있다.
+          화면에는 총과 세상만 보인다. 풀과 나무의 흔들림으로 바람을 읽고, 탄착 흙먼지를 보고 조준을 고쳐라.
+        </p>
+        <button id="btn-start" class="primary">클릭해서 시작</button>
+
+        <div class="cols">
+          <section>
+            <h2>조작</h2>
+            <table class="keys">
+              <tr><td>WASD</td><td>이동 (CapsLock: 걷기/뛰기 전환)</td></tr>
+              <tr><td>Shift</td><td>전력질주 · 조준 중엔 숨 참기</td></tr>
+              <tr><td>C / Z</td><td>앉아쏴 / 엎드려</td></tr>
+              <tr><td>Q / E</td><td>기울이기</td></tr>
+              <tr><td>좌클릭 / 우클릭</td><td>사격 / 조준(누르는 동안)</td></tr>
+              <tr><td>R</td><td>짧게: 전술 재장전 · 길게: 급속 재장전</td></tr>
+              <tr><td>B</td><td>조정간(단발/연발)</td></tr>
+              <tr><td>T</td><td>탄창 확인</td></tr>
+              <tr><td>V</td><td>조준기 교체(테스트용)</td></tr>
+              <tr><td>P</td><td>시나리오 초기화</td></tr>
+              <tr><td>F3</td><td>디버그 오버레이</td></tr>
+              <tr><td>Esc</td><td>설정</td></tr>
+            </table>
+          </section>
+          <section>
+            <h2>설정</h2>
+            <label>마우스 감도 <span id="v-sens"></span>
+              <input id="s-sens" type="range" min="0.2" max="3" step="0.05" />
+            </label>
+            <label>시야각(세로) <span id="v-fov"></span>
+              <input id="s-fov" type="range" min="45" max="80" step="1" />
+            </label>
+            <label>1배율 기준 시야각 <span id="v-realfov"></span>
+              <input id="s-realfov" type="range" min="24" max="50" step="1" />
+              <small>모니터가 눈에서 실제로 차지하는 세로 각도. 조준(철제) 시 이 시야각이 실물 크기, 4배율은 그 4배</small>
+            </label>
+            <label>영점 거리
+              <select id="s-zero">
+                <option value="50">50 m</option>
+                <option value="100">100 m</option>
+                <option value="200">200 m</option>
+                <option value="300">300 m</option>
+              </select>
+              <small>BDC 레티클은 100 m 영점 기준으로 새겨져 있음</small>
+            </label>
+            <label>바람
+              <select id="s-wind-mode">
+                <option value="random">랜덤(시작 시 2~8 m/s)</option>
+                <option value="fixed">고정값</option>
+              </select>
+            </label>
+            <div id="wind-fixed" class="row">
+              <label>풍속 <span id="v-wspd"></span> m/s<input id="s-wspd" type="range" min="0" max="12" step="0.5" /></label>
+              <label>불어오는 방향 <span id="v-wdir"></span>°<input id="s-wdir" type="range" min="0" max="355" step="5" /></label>
+            </div>
+            <label>그래픽 품질
+              <select id="s-quality">
+                <option value="low">낮음</option>
+                <option value="medium">중간</option>
+                <option value="high">높음</option>
+              </select>
+            </label>
+            <label class="check"><input id="s-adstoggle" type="checkbox" /> 조준 토글(우클릭 한 번)</label>
+            <label>음량 <span id="v-vol"></span>
+              <input id="s-vol" type="range" min="0" max="1" step="0.05" />
+            </label>
+          </section>
+        </div>
+        <p class="note">헤드폰 권장. 먼 곳의 탄착음과 쓰러지는 소리는 음속(343 m/s)만큼 늦게 들린다.</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
