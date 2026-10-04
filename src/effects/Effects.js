@@ -135,31 +135,34 @@ export class Effects {
   }
 
   _dust(x, y, z, col, scale, dir, count) {
+    // 마른 흙에 소총탄이 박히면: 위로 솟는 짙은 먼지 기둥(1~2 m) + 낮게 퍼지는 먼지, 수 초간 바람에 흘러감.
+    // 고운 먼지는 햇빛을 강하게 산란해 지면보다 밝게 보인다.
     const P = this.particles;
     for (let i = 0; i < count; i++) {
-      const up = 0.9 + rng.next() * 1.6;
-      const out = 0.4 + rng.next() * 1.3;
+      const column = i < count * 0.45;
+      const up = column ? 1.8 + rng.next() * 2.4 : 0.5 + rng.next() * 1.0;
+      const out = column ? 0.2 + rng.next() * 0.5 : 0.6 + rng.next() * 1.4;
       const a = rng.next() * Math.PI * 2;
-      const fwd = dir ? 0.9 + rng.next() * 1.2 : 0;
-      const shade = 0.85 + rng.next() * 0.25;
+      const fwd = dir ? 0.6 + rng.next() * 1.0 : 0;
+      const shade = 1.15 + rng.next() * 0.25;
       P.spawn({
-        x: x + (rng.next() - 0.5) * 0.1,
-        y: y + 0.03,
-        z: z + (rng.next() - 0.5) * 0.1,
+        x: x + (rng.next() - 0.5) * 0.12,
+        y: y + 0.04,
+        z: z + (rng.next() - 0.5) * 0.12,
         vx: Math.cos(a) * out + (dir ? dir.x * fwd : 0),
         vy: up,
         vz: Math.sin(a) * out + (dir ? dir.z * fwd : 0),
-        life: (1.8 + rng.next() * 1.6) * scale,
-        size0: 0.1 * scale,
-        size1: (0.55 + rng.next() * 0.55) * scale,
-        r: col[0] * shade,
-        g: col[1] * shade,
-        b: col[2] * shade,
-        alpha: 0.82,
+        life: (2.6 + rng.next() * 2.2) * Math.min(1.2, scale + 0.2),
+        size0: 0.14 * scale,
+        size1: (column ? 0.75 + rng.next() * 0.5 : 0.9 + rng.next() * 0.7) * scale,
+        r: Math.min(1, col[0] * shade),
+        g: Math.min(1, col[1] * shade),
+        b: Math.min(1, col[2] * shade),
+        alpha: column ? 0.95 : 0.8,
         kind: PK.DUST,
-        drag: 2.6,
-        gravity: 0.35,
-        wind: 0.9,
+        drag: column ? 1.9 : 2.6,
+        gravity: 0.25,
+        wind: 0.95,
       });
     }
   }
@@ -222,10 +225,10 @@ export class Effects {
     if (e.kind === 'ground') {
       const col = DUST_COLORS[e.surface] || DUST_COLORS.stubble;
       const energyK = Math.min(1.25, Math.max(0.55, Math.sqrt(e.energy / 900)));
-      this._dust(e.x, e.y, e.z, col, energyK * (e.ricochet ? 0.7 : 1), { x: dir.x * 0.6, z: dir.z * 0.6 }, e.ricochet ? 9 : 16);
+      this._dust(e.x, e.y, e.z, col, energyK * (e.ricochet ? 0.75 : 1), { x: dir.x * 0.6, z: dir.z * 0.6 }, e.ricochet ? 12 : 22);
       this._chips(e.x, e.y + 0.02, e.z, [col[0] * 0.55, col[1] * 0.5, col[2] * 0.45], 8, 3.2, { x: dir.x * 0.3, z: dir.z * 0.3 }, 0.025);
       if (e.surface === 'forest' || e.surface === 'grass' || e.surface === 'fallow') this._leaves(e.x, e.y + 0.1, e.z, 2);
-      this.groundMarks.add({ x: e.x, y: e.y, z: e.z }, e.normal, 0.12);
+      this.groundMarks.add({ x: e.x, y: e.y, z: e.z }, e.normal, 0.22);
     } else if (e.kind === 'trunk' || e.kind === 'log') {
       const back = { x: -dir.x, z: -dir.z };
       this._chips(e.x, e.y, e.z, [0.8, 0.72, 0.55], 8, 3.5, back, 0.022);

@@ -23,6 +23,8 @@ export class BulletSystem {
     this.models = new Map();
     this.targetProviders = [];
     this.nearMissProvider = null;
+    // 2단계: 청자(플레이어) 근처를 지나는 남의 탄 → 'bullet:flyby'(초음속 크랙). listener = () => {x,y,z}
+    this.listener = null;
     this.trails = [];
     this.recordTrails = true;
     this._q = [];
@@ -170,6 +172,23 @@ export class BulletSystem {
 
     // 근탄(제압) 통지
     if (this.nearMissProvider) this.nearMissProvider(b, x0, y0, z0, dx, dy, dz);
+    if (this.listener && b.shooter !== 'player' && !b.flybyDone) {
+      const L = this.listener();
+      const r = pointSegDistance(L.x, L.y, L.z, x0, y0, z0, dx, dy, dz);
+      if (r.d < 15 && r.t > 0 && r.t < 1) {
+        b.flybyDone = true;
+        const sp = this._speed(b);
+        this.events.emit('bullet:flyby', {
+          x: x0 + dx * r.t,
+          y: y0 + dy * r.t,
+          z: z0 + dz * r.t,
+          distance: r.d,
+          speed: sp,
+          supersonic: sp > ATMOSPHERE.speedOfSoundBallistic,
+          shooter: b.shooter,
+        });
+      }
+    }
 
     if (hits.length === 0) {
       this._checkEnd(b);

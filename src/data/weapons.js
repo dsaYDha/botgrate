@@ -138,13 +138,15 @@ export const WEAPONS = {
     // --- 반동(자세별) ---
     // 자유 반동 충격량 J = m_b·v0 + m_powder·v_gas (v_gas ≈ 1.75·v0)
     // 총구 들림 각충격량 = J · leverArm,  각속도 ω0 = 그 / inertia
-    // 회복은 감쇠 스프링(사수가 자연조준점으로 되돌림). residual은 조준점에 남는 몫.
+    // 회복은 감쇠 스프링(사수가 자연조준점으로 되돌림). residual은 조준점에 남는 몫:
+    //   발당 잔여 상승 = residual × ω0 / (2π·freq) → 서서 약 2.7, 무릎 약 1.3, 엎드려 약 0.3 mrad.
+    //   연발 10발(0.8 s)이면 서서 스프링 누적(~21 mrad)과 합쳐 약 50 mrad(25 m에서 1.2 m) 상승.
     recoil: {
       gasVelocityFactor: 1.75,
       stances: {
-        stand: { leverArm: 0.055, inertia: 0.52, freq: 3.2, damping: 0.72, residual: 0.32, yawRatio: 0.42, yawBias: 0.12 },
-        crouch: { leverArm: 0.045, inertia: 0.6, freq: 3.6, damping: 0.75, residual: 0.22, yawRatio: 0.36, yawBias: 0.1 },
-        prone: { leverArm: 0.03, inertia: 0.75, freq: 4.5, damping: 0.8, residual: 0.1, yawRatio: 0.3, yawBias: 0.06 },
+        stand: { leverArm: 0.055, inertia: 0.52, freq: 3.2, damping: 0.72, residual: 0.08, yawRatio: 0.42, yawBias: 0.12 },
+        crouch: { leverArm: 0.045, inertia: 0.6, freq: 3.6, damping: 0.75, residual: 0.06, yawRatio: 0.36, yawBias: 0.1 },
+        prone: { leverArm: 0.03, inertia: 0.75, freq: 4.5, damping: 0.8, residual: 0.035, yawRatio: 0.3, yawBias: 0.06 },
       },
       // 시각용: 총 모델 후퇴(m)와 카메라 흔들림(rad)
       modelKick: 0.028,

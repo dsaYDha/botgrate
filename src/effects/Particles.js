@@ -215,7 +215,7 @@ export class Particles {
       const kind = this.kind[k];
       let size = this.s0[k] + (this.s1[k] - this.s0[k]) * (kind === PK.DUST || kind === PK.SMOKE ? 1 - Math.pow(1 - f, 2.2) : f);
       let alpha = this.a0[k];
-      if (kind === PK.DUST || kind === PK.SMOKE) alpha *= Math.min(1, this.life[k] / 0.06) * Math.pow(1 - f, 1.4);
+      if (kind === PK.DUST || kind === PK.SMOKE) alpha *= Math.min(1, this.life[k] / 0.05) * Math.pow(1 - f, 0.85);
       else if (kind === PK.FLASH) alpha *= 1 - f;
       else alpha *= f > 0.85 ? (1 - f) / 0.15 : 1;
       P[k * 4] = this.px[k];

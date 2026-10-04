@@ -128,27 +128,33 @@ export class WeaponModel {
     this.optic.add(objLens);
     this.body.add(this.optic);
 
-    // 손과 팔(무기에 붙어 있음)
+    // 손과 팔: 아래팔은 손목과 팔꿈치(몸 쪽 고정점)를 잇는 원기둥으로 매 프레임 갱신
     this.rightHand = new THREE.Group();
-    this.rightHand.add(box(0.034, 0.075, 0.09, glove, 0.012, -0.095, -0.28));
-    const rForearm = cylZ(0.042, 0.036, 0.3, sleeve, 0, 0, 0, 10);
-    rForearm.position.set(0.075, -0.15, -0.14);
-    rForearm.rotation.set(-0.35, -0.55, 0);
-    this.rightHand.add(rForearm);
+    this.rightHand.add(box(0.034, 0.08, 0.095, glove, 0.014, -0.095, -0.285));
+    this.rightHand.add(box(0.02, 0.022, 0.05, glove, 0.006, -0.05, -0.315)); // 검지
     this.body.add(this.rightHand);
-
     this.leftHand = new THREE.Group();
-    const lh = box(0.04, 0.035, 0.1, glove, -0.006, -0.03, 0);
-    this.leftHand.add(lh);
-    const fingers = box(0.03, 0.02, 0.08, glove, 0.02, 0.0, 0.0);
-    this.leftHand.add(fingers);
-    this.leftArm = cylZ(0.044, 0.037, 0.34, sleeve, 0, 0, 0, 10);
-    this.leftArm.position.set(-0.075, -0.11, 0.13);
-    this.leftArm.rotation.set(-0.42, 0.42, 0);
-    this.leftHand.add(this.leftArm);
+    this.leftHand.add(box(0.045, 0.034, 0.1, glove, -0.012, -0.034, 0));
+    this.leftHand.add(box(0.034, 0.018, 0.085, glove, 0.016, 0.008, 0.0)); // 손가락이 총열 덮개를 감쌈
     this.leftHandHome = new THREE.Vector3(0, -0.005, -0.52);
     this.leftHand.position.copy(this.leftHandHome);
     this.body.add(this.leftHand);
+    const limb = () => {
+      const g = new THREE.CylinderGeometry(1, 1, 1, 10, 1);
+      g.translate(0, 0.5, 0);
+      const m = new THREE.Mesh(g, sleeve);
+      this.body.add(m);
+      return m;
+    };
+    this.rForearm = limb();
+    this.lForearm = limb();
+    // 팔꿈치 위치(무기 좌표, 견착 자세 기준)
+    this.rElbow = new THREE.Vector3(0.2, -0.24, -0.06);
+    this.lElbow = new THREE.Vector3(-0.2, -0.22, -0.3);
+    this.rWrist = new THREE.Vector3(0.025, -0.13, -0.255);
+    this._v = new THREE.Vector3();
+    this._q = new THREE.Quaternion();
+    this._placeLimb(this.rForearm, this.rWrist, this.rElbow, 0.04, 0.047);
 
     this.root.traverse((o) => {
       if (o.isMesh) {
@@ -178,6 +184,14 @@ export class WeaponModel {
     this.rearMat.depthWrite = o > 0.95;
   }
 
+  _placeLimb(mesh, a, b, r0, r1) {
+    const d = this._v.copy(b).sub(a);
+    const len = d.length();
+    mesh.position.copy(a);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.divideScalar(len));
+    mesh.scale.set((r0 + r1) / 2, len, (r0 + r1) / 2);
+  }
+
   animate(a) {
     if (a.magOffset) this.mag.position.copy(this.magHome).add(a.magOffset);
     else this.mag.position.copy(this.magHome);
@@ -185,5 +199,7 @@ export class WeaponModel {
     this.leftHand.position.copy(this.leftHandHome);
     if (a.leftHandTo) this.leftHand.position.lerp(a.leftHandTo, a.leftHandBlend || 0);
     this.body.rotation.set(a.tilt || 0, 0, a.cant || 0);
+    const wrist = new THREE.Vector3(-0.03, -0.045, 0.045).add(this.leftHand.position);
+    this._placeLimb(this.lForearm, wrist, this.lElbow, 0.038, 0.046);
   }
 }

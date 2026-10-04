@@ -14,10 +14,19 @@ function leafPath(ctx, kind, len, wid) {
     ctx.lineTo(-wid * 0.25, len * 0.85);
     ctx.quadraticCurveTo(-wid * 0.9, len * 0.35, 0, 0);
   } else if (kind === 'elm') {
-    // 비대칭 타원(톱니는 생략, 작은 잎)
+    // 비대칭 타원 + 잔 톱니
     ctx.moveTo(0, 0);
-    ctx.bezierCurveTo(wid * 0.75, len * 0.15, wid * 0.65, len * 0.8, 0, len);
-    ctx.bezierCurveTo(-wid * 0.55, len * 0.75, -wid * 0.7, len * 0.25, 0, 0);
+    const n = 9;
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      const w = wid * 0.5 * Math.sin(Math.PI * Math.pow(t, 0.8)) * (i % 2 ? 1.08 : 0.94);
+      ctx.lineTo(w, len * t);
+    }
+    for (let i = n - 1; i >= 0; i--) {
+      const t = i / n;
+      const w = wid * 0.45 * Math.sin(Math.PI * Math.pow(t, 0.85)) * (i % 2 ? 1.08 : 0.94);
+      ctx.lineTo(-w, len * t);
+    }
   } else {
     // 작은 타원 소엽
     ctx.ellipse(0, len * 0.5, wid * 0.5, len * 0.5, 0, 0, Math.PI * 2);
@@ -39,20 +48,47 @@ function drawTile(ctx, ox, oy, size, kind, rng) {
     ctx.stroke();
   };
   const leaf = (x, y, ang, len, wid, k = kind) => {
-    const shade = Math.floor(rng.range(150, 255));
+    const shade = Math.floor(rng.range(135, 245));
     const id = Math.floor(rng.range(0, 255));
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang);
-    ctx.fillStyle = `rgb(${shade},0,${id})`;
-    leafPath(ctx, k, len, wid);
-    ctx.fill();
-    // 잎맥
-    ctx.strokeStyle = `rgba(${Math.max(0, shade - 60)},0,${id},0.7)`;
+    // 잎자루
+    ctx.strokeStyle = `rgba(60,255,${id},1)`;
     ctx.lineWidth = 1;
     ctx.beginPath();
+    ctx.moveTo(0, -len * 0.18);
+    ctx.lineTo(0, 0);
+    ctx.stroke();
+    // 잎몸: 밑에서 끝으로 밝기 변화 + 가장자리 어둡게(R=명암, B=잎 번호)
+    const g = ctx.createLinearGradient(-wid * 0.5, 0, wid * 0.5, len);
+    const d = Math.max(0, shade - 55);
+    g.addColorStop(0, `rgb(${d},0,${id})`);
+    g.addColorStop(0.45, `rgb(${shade},0,${id})`);
+    g.addColorStop(1, `rgb(${Math.max(0, shade - 30)},0,${id})`);
+    ctx.fillStyle = g;
+    leafPath(ctx, k, len, wid);
+    ctx.fill();
+    // 잎맥: 주맥 + 측맥
+    ctx.strokeStyle = `rgba(${Math.min(255, shade + 25)},0,${id},0.85)`;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(0, len * 0.9);
+    ctx.lineTo(0, len * 0.92);
+    const nv = k === 'locust' ? 3 : 5;
+    for (let v = 1; v <= nv; v++) {
+      const t = v / (nv + 1);
+      const w = wid * 0.42 * Math.sin(Math.PI * Math.min(1, t * 1.1));
+      ctx.moveTo(0, len * t);
+      ctx.lineTo(w, len * (t + 0.12));
+      ctx.moveTo(0, len * t);
+      ctx.lineTo(-w, len * (t + 0.12));
+    }
+    ctx.stroke();
+    // 그늘진 가장자리 선
+    ctx.strokeStyle = `rgba(${Math.max(0, shade - 80)},0,${id},0.6)`;
+    ctx.lineWidth = 1.1;
+    leafPath(ctx, k, len, wid);
     ctx.stroke();
     ctx.restore();
   };

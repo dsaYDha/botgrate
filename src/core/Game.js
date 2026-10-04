@@ -4,6 +4,8 @@ import { Sky, SUN } from '../render/Sky.js';
 import { TerrainRenderer } from '../render/TerrainRenderer.js';
 import { TreeRenderer } from '../render/TreeRenderer.js';
 import { VegetationRenderer } from '../render/VegetationRenderer.js';
+import { DistantScenery } from '../render/DistantScenery.js';
+import { baseHeight } from '../world/Terrain.js';
 import { U } from '../render/shaderLib.js';
 import { QUALITY } from '../data/quality.js';
 import { DEFAULT_WEAPON } from '../data/weapons.js';
@@ -74,6 +76,7 @@ export class Game {
     this.trees = new TreeRenderer(this.scene, this.world, this.quality);
     this.sky.sun.shadow.camera.layers.enable(1);
     this.vegetation = new VegetationRenderer(this.scene, this.quality);
+    this.distant = new DistantScenery(this.scene, (x, z) => baseHeight(x, z, this.world.data.terrain));
 
     // 무기 장면 조명(본 장면과 같은 태양·하늘빛)
     const wsun = new THREE.DirectionalLight(SUN.color, SUN.intensity);
@@ -105,6 +108,7 @@ export class Game {
 
     await step('적을 배치하는 중…');
     this.enemies = new EnemyManager(this.scene, this.world, this.events, this.bullets);
+    this.bullets.listener = () => this.eyePos;
     this.debug = new DebugOverlay(document.getElementById('debug'), this.scene, this.events);
 
     // 바람

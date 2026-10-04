@@ -659,7 +659,28 @@ export class TreeRenderer {
    * @param {THREE.Vector3} shadowFocus 그림자 상자 중심
    */
   update(camera, zoom, shadowFocus, shadowExtent) {
-    this.frustum.setFromProjectionMatrix(this.tmpM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    // 카메라가 거의 그대로면 인스턴스 버퍼를 다시 만들지 않는다(조준 흔들림 정도는 넓힌 절두체로 흡수)
+    const last = this._last;
+    const q = camera.quaternion;
+    if (
+      last &&
+      camera.position.distanceToSquared(last.pos) < 0.09 &&
+      Math.abs(q.dot(last.quat)) > 0.99991 &&
+      Math.abs(zoom / last.zoom - 1) < 0.02 &&
+      Math.abs(shadowFocus.x - last.sx) < 2 &&
+      Math.abs(shadowFocus.z - last.sz) < 2
+    )
+      return;
+    this._last = { pos: camera.position.clone(), quat: q.clone(), zoom, sx: shadowFocus.x, sz: shadowFocus.z };
+    // 컬링용 절두체: 시야각을 조금 넓혀 작은 회전에도 빈틈이 없게
+    if (!this.cullCam) this.cullCam = new THREE.PerspectiveCamera();
+    const cc = this.cullCam;
+    cc.fov = Math.min(170, camera.fov * 1.12 + 2);
+    cc.aspect = camera.aspect;
+    cc.near = camera.near;
+    cc.far = camera.far;
+    cc.updateProjectionMatrix();
+    this.frustum.setFromProjectionMatrix(this.tmpM.multiplyMatrices(cc.projectionMatrix, camera.matrixWorldInverse));
     const cx = camera.position.x;
     const cy = camera.position.y;
     const cz = camera.position.z;

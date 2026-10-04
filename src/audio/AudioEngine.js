@@ -252,6 +252,10 @@ export class AudioEngine {
       else if (e.type === 'exhale') this.playLocal(this.bank.breath.exhale, 0.16);
       else if (e.type === 'gasp') this.playLocal(this.bank.breath.gasp, 0.3);
     });
+    // 2단계: 남의 초음속 탄이 스치면 크랙(마하 원뿔은 총성보다 먼저 도착)
+    ev.on('bullet:flyby', (e) => {
+      if (e.supersonic) this.playCrack(e, e.distance);
+    });
     ev.on('enemy:fallSound', (e) => this.propagate(this._pick(this.bank.impact.fall), e.position, { gain: 2.2 * (e.intensity || 1), ref: 2, reverb: 0.25 }));
     ev.on('enemy:rifleDrop', (e) => this.propagate(this._pick(this.bank.impact.rifleDrop), e.position, { gain: 1.4, ref: 2, reverb: 0.2 }));
   }
