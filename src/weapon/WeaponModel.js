@@ -1,6 +1,7 @@
 // 절차적 카빈 모델(14.5인치, 직선형 개머리판) + 장갑 낀 손.
 // 좌표: 무기 좌표계(원점 = 개머리판 끝 중심, -z 총구, +y 위). 실제 치수(m).
-// 철제 조준기: 접이식 가늠자(구경 1.8 mm) + 가늠쇠(폭 1.8 mm, 끝 높이 = 조준선 6.6 cm).
+// 철제 조준기: 접이식 가늠자(작은 구멍 1.75 mm / 큰 구멍 5.1 mm) + 가늠쇠(폭 1.83 mm = 0.072 in, 끝 높이 = 조준선 6.6 cm).
+// 조준선 길이 0.37 m(가늠자~가늠쇠), 눈~가늠쇠 0.45 m.
 
 import * as THREE from 'three';
 import { patchMaterial } from '../render/shaderLib.js';
@@ -100,13 +101,14 @@ export class WeaponModel {
     this.rearSight.add(base);
     this.rearLeaf = new THREE.Group();
     this.rearLeaf.position.set(0, 0.058, -0.27);
-    // 가늠자 판: 조준선 높이(0.066)에 구멍. 링 형태
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.0026, 0.0075, 28), this.rearMat);
-    ring.position.set(0, 0.008, 0);
-    this.rearLeaf.add(ring);
-    const ringBack = ring.clone();
-    ringBack.rotation.y = Math.PI;
-    this.rearLeaf.add(ringBack);
+    // 가늠자 판: 조준선 높이(0.066)에 구멍. 링 형태(구멍 지름은 setSight에서)
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.000875, 0.0075, 32), this.rearMat);
+    this.ring.position.set(0, 0.008, 0);
+    this.rearLeaf.add(this.ring);
+    this.ringBack = this.ring.clone();
+    this.ringBack.rotation.y = Math.PI;
+    this.rearLeaf.add(this.ringBack);
+    this.apertureD = 0.00175;
     this.rearLeaf.add(box(0.016, 0.004, 0.004, this.rearMat, 0, 0.0, 0));
     this.rearLeaf.add(box(0.003, 0.012, 0.004, this.rearMat, 0.0065, 0.004, 0));
     this.rearLeaf.add(box(0.003, 0.012, 0.004, this.rearMat, -0.0065, 0.004, 0));
@@ -166,11 +168,18 @@ export class WeaponModel {
     this.setSight('optic4x');
   }
 
-  setSight(kind) {
+  setSight(kind, apertureD = this.apertureD) {
     this.sight = kind;
     this.optic.visible = kind === 'optic4x';
     // 광학 장착 시 가늠자는 접어 둔다
     this.rearLeaf.rotation.x = kind === 'optic4x' ? -Math.PI / 2 : 0;
+    if (apertureD !== this.apertureD) {
+      this.apertureD = apertureD;
+      const g = new THREE.RingGeometry(apertureD / 2, 0.0075, 32);
+      this.ring.geometry.dispose();
+      this.ring.geometry = g;
+      this.ringBack.geometry = g;
+    }
   }
 
   /**

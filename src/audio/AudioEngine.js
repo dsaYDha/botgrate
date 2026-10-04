@@ -238,6 +238,10 @@ export class AudioEngine {
       if (this.ready && rng.next() < 0.5) this.propagate(this._pick(this.bank.impact.leaves), e, { gain: 0.5, ref: 3, reverb: 0.1 });
     });
     ev.on('weapon:sound', (e) => this.onWeaponSound(e));
+    // 거치: 총을 통나무·흙·줄기에 걸칠 때 작게 스치는 소리
+    ev.on('weapon:rest', () => {
+      if (this.ready) this.playLocal(this._pick(this.bank.gear), 0.09, { rate: 1.25 });
+    });
     ev.on('player:step', (e) => this.onStep(e));
     ev.on('player:stance', (e) => {
       const s = this.bank.step[e.to === 'prone' || e.from === 'prone' ? 'grass' : 'dirt'];

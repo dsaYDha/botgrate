@@ -62,7 +62,8 @@ export class Enemy {
     const pal = CAMO_PALETTES[Math.floor(rng.next() * CAMO_PALETTES.length)];
     const gear = GEAR_COLORS[Math.floor(rng.next() * GEAR_COLORS.length)];
     const sk = 0.85 + rng.next() * 0.3;
-    this.material = bodyMaterial(pal, gear, [0.24 * sk, 0.17 * sk, 0.12 * sk]);
+    // 절반 정도는 얼굴에 위장 크림(나머지는 맨얼굴 — 그래도 피부는 그늘에서 어둡다)
+    this.material = bodyMaterial(pal, gear, [0.24 * sk, 0.17 * sk, 0.12 * sk], rng.next() < 0.55 ? 0.75 + rng.next() * 0.2 : 0);
     this.mesh = new THREE.SkinnedMesh(geo, this.material);
     this.mesh.add(skel.root);
     this.mesh.bind(new THREE.Skeleton(skel.list));
@@ -336,6 +337,16 @@ export class Enemy {
       if (d > 1.6 || d < 0.01) continue;
       const ang = wrapAngle(Math.atan2(dx, -dz) - want);
       if (Math.abs(ang) < 0.9) steer += (ang > 0 ? -1 : 1) * (1.6 - d) * 0.9;
+    }
+    // 다른 적과 겹치지 않게(몰려다니지 않음)
+    for (const o of this.ctx.enemies || []) {
+      if (o === this || o.state !== 'normal') continue;
+      const dx = o.x - this.x;
+      const dz = o.z - this.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 3 || d < 0.01) continue;
+      const ang = wrapAngle(Math.atan2(dx, -dz) - want);
+      if (Math.abs(ang) < 1.2) steer += (ang > 0 ? -1 : 1) * (3 - d) * 0.35;
     }
     return clamp(steer, -1.2, 1.2);
   }

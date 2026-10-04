@@ -48,8 +48,12 @@ export const WEAPONS = {
         eye: [0, 0.066, -0.19],
         rear: [0, 0.066, -0.27],
         front: [0, 0.066, -0.64], // 가늠쇠 끝
-        frontPostWidth: 0.0018,
-        rearApertureDiameter: 0.0051, // 큰 가늠자 구멍(근거리용 5.1 mm) — 화면에서 작은 구멍(1.8 mm)은 너무 좁음
+        frontPostWidth: 0.0018, // 표준 A2 가늠쇠 0.072 in — 눈에서 0.45 m라 4 mrad(14 MOA): 110 m 밖 상체 폭(45 cm)을 다 가린다
+        // 접이식 가늠자 두 구멍(V로 바꿈): 작은 구멍 = 정밀 조준(300 m 이상), 큰 구멍(0~2) = 근거리·어두울 때
+        apertures: [
+          { name: '작은 가늠자 구멍', diameter: 0.00175 }, // 0.069 in
+          { name: '큰 가늠자 구멍(0~2)', diameter: 0.0051 }, // 0.2 in
+        ],
       },
       optic4x: {
         type: 'optic',
@@ -153,24 +157,46 @@ export const WEAPONS = {
       cameraShake: 0.006,
     },
 
-    // --- 조준 흔들림(자세별, mrad 단위 RMS/진폭) ---
+    // --- 조준 흔들림(자세별). 단위 MOA(1 MOA = 0.291 mrad, 300 m에서 8.7 cm) ---
+    // hold: 숨을 참거나 호흡 정지기에 쏠 때의 '흔들림 영역' — 느린 표류의 축별 표준편차.
+    //   90 % 원 지름 ≈ 4.3 × hold(맥박·떨림 포함 실측은 test:accuracy) → 엎드려 약 3.6, 무릎 7, 서서 14.5 MOA.
+    //   rested: 거치했을 때(엎드려 약 2, 무릎 4, 서서 6.5 MOA).
+    //   근거: 사격 교육 기준(엎드려 2, 무릎·앉아 5(거치 3), 서서 7 MOA 안팎 — 숙련자)과 일반 병사 수준을 함께 본 값.
+    // corr: 표류 상관 시간(s) — 서서는 빨리, 엎드려는 천천히 떠돈다.
+    // breath: 숨 쉴 때 상하 진폭(MOA, 날숨 끝에 잠깐 멈춤). pulse: 맥박 튐 진폭. tremor: 미세 떨림.
+    // fatigueRate: 거치 없이 fatigueOnset(10 s) 넘게 조준하면 초당 흔들림 증가율(팔 피로).
     sway: {
       stances: {
-        stand: { wander: 1.35, breath: 1.5, pulse: 0.16, tremor: 0.05 },
-        crouch: { wander: 0.8, breath: 1.0, pulse: 0.12, tremor: 0.04 },
-        prone: { wander: 0.25, breath: 0.45, pulse: 0.09, tremor: 0.025 },
+        stand: { hold: 3.25, rested: 1.45, corr: 0.7, breath: 3.2, pulse: 0.35, tremor: 0.25, fatigueRate: 0.04 },
+        crouch: { hold: 1.55, rested: 0.88, corr: 0.9, breath: 2.0, pulse: 0.3, tremor: 0.15, fatigueRate: 0.025 },
+        prone: { hold: 0.82, rested: 0.4, corr: 1.3, breath: 1.2, pulse: 0.28, tremor: 0.08, fatigueRate: 0 },
       },
-      moving: 3.5, // 이동 중 추가(mrad)
-      notShouldered: 2.2, // 비조준 시 배수
+      restedBreath: 0.55, // 거치하면 호흡이 총을 덜 움직인다
+      fatigueOnset: 10, // s
+      fatigueMax: 1.0, // 최대 +100 %
+      fatigueRecover: 1.5, // 조준을 풀거나 거치하면 누적 시간이 초당 1.5 s씩 줄어듦
+      exertion: 1.75, // 심박 상승(0~1)에 따른 배수 1 + 1.75·ex → 10 s 질주 직후(ex≈0.7) 약 2.2배, 최대 2.75배
+      moving: 9, // 조준하고 걸을 때(1.5 m/s) 걸음 흔들림 진폭(MOA)
+      notShouldered: 2.2, // 비조준(견착만) 시 배수
       holdBreath: {
         stableTime: 5.0, // 이 시간까지 안정
         maxTime: 11.0, // 이후 강제로 숨을 내쉼
-        breathScale: 0.04,
-        wanderScale: 0.55,
-        overtimeTremor: 1.6, // 안정 시간 초과 후 떨림 증가율(mrad/s)
+        exertionCut: 0.55, // 숨이 찰수록 참을 수 있는 시간이 줄어듦(질주 직후 약 60 %)
+        breathScale: 0.08, // 숨 참는 동안 남는 호흡 흔들림(가슴 움직임만 멈춘다)
+        wanderOvertime: 1.6, // 한계 시간에 이르면 표류 배수(숨 참기는 표류를 없애지 못한다)
+        overtimeTremor: 0.6, // 안정 시간 초과 후 떨림 증가율(MOA/s)
         recovery: 4.0, // 숨 참기 후 거친 호흡 지속(s)
       },
+      // 급한 격발: 이전 발 뒤 hasteWindow 안에 방아쇠를 당기면 격발 때 총이 흔들림(침착하면 0)
+      trigger: { hasteWindow: 0.45, jerk: { stand: 2.2, crouch: 1.4, prone: 0.9 }, restedScale: 0.6, biasLeft: 0.35, biasLow: 0.5 },
+      // 눈 위치 어긋남(m, 광학 아이박스 6 mm 기준): 조준 직후·자세 전환·이동·반동·숨 가쁨
+      eye: { settleStart: 0.009, settle: 0.32, settleProne: 0.22, move: 0.004, exertion: 0.0018, recoil: 0.007 },
     },
+
+    // --- 총열 과열: 평균 온도 상승(°C)과 냉각, 분산·탄착점 변화 ---
+    // 발당 약 2.6 °C(장약 에너지의 일부가 총열로, 14.5인치 총열 질량 기준 추정), 냉각 시정수 10분.
+    // 50 °C 넘게 오르면 분산이 °C당 0.4 % 커지고(최대 +60 %) 탄착점이 °C당 0.005 MOA씩 한쪽으로 이동.
+    barrel: { ambient: 15, heatPerShot: 2.6, coolTau: 600, dispersionFrom: 50, dispersionPerDeg: 0.004, dispersionMax: 0.6, shiftPerDeg: 0.005 },
 
     // --- 연출 ---
     muzzleFlash: { size: 0.09, duration: 0.03 },

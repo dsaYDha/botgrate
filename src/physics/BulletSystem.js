@@ -267,6 +267,51 @@ export class BulletSystem {
     }
   }
 
+  /**
+   * 디버그(F3): 광선이 처음 닿는 고체(지면·줄기·가지·통나무·짚 더미·뿌리판·적). 잎·풀 볼륨은 지나친다.
+   * @returns {{dist:number, kind:string, part?:string, x:number, y:number, z:number}|null}
+   */
+  rayProbe(ox, oy, oz, dx, dy, dz, maxDist = 1500) {
+    const w = this.world;
+    const STEP = 2;
+    const h = this._hit;
+    const q = [];
+    const hits = [];
+    let x0 = ox;
+    let y0 = oy;
+    let z0 = oz;
+    const sx = dx * STEP;
+    const sy = dy * STEP;
+    const sz = dz * STEP;
+    for (let d = 0; d < maxDist; d += STEP) {
+      hits.length = 0;
+      w.hash.query(Math.min(x0, x0 + sx) - 0.5, Math.min(z0, z0 + sz) - 0.5, Math.max(x0, x0 + sx) + 0.5, Math.max(z0, z0 + sz) + 0.5, q);
+      for (const o of q) {
+        if (o.kind === 'trunk') {
+          if (segStem(x0, y0, z0, sx, sy, sz, o, h)) hits.push({ t0: h.t0, kind: 'trunk' });
+        } else if (o.kind === 'limb') {
+          if (segCappedCylinder(x0, y0, z0, sx, sy, sz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, o.r, h)) hits.push({ t0: h.t0, kind: 'limb' });
+        } else if (o.kind === 'log') {
+          if (segCylinder(x0, y0, z0, sx, sy, sz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, (o.r + o.r2) * 0.5, h)) hits.push({ t0: h.t0, kind: 'log' });
+        } else if (o.kind === 'bale' || o.kind === 'rootPlate') {
+          if (segCappedCylinder(x0, y0, z0, sx, sy, sz, o.ax, o.ay, o.az, o.bx, o.by, o.bz, o.r, h)) hits.push({ t0: h.t0, kind: o.kind });
+        }
+      }
+      for (const fn of this.targetProviders) fn(x0, y0, z0, sx, sy, sz, hits);
+      if (y0 + sy < w.terrain.heightAt(x0 + sx, z0 + sz)) hits.push({ t0: this._groundBisect(x0, y0, z0, sx, sy, sz, 0, 1), kind: 'ground' });
+      if (hits.length) {
+        let best = hits[0];
+        for (const k of hits) if (k.t0 < best.t0) best = k;
+        const t = Math.max(0, best.t0);
+        return { dist: d + t * STEP, kind: best.kind, part: best.part, x: x0 + sx * t, y: y0 + sy * t, z: z0 + sz * t };
+      }
+      x0 += sx;
+      y0 += sy;
+      z0 += sz;
+    }
+    return null;
+  }
+
   _groundBisect(x0, y0, z0, dx, dy, dz, a, c) {
     const t = this.world.terrain;
     let lo = a;

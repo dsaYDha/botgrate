@@ -6,6 +6,9 @@ import { Particles, PK } from './Particles.js';
 import { patchMaterial } from '../render/shaderLib.js';
 import { rng } from '../core/Random.js';
 
+// 엎드려쏴 총구 먼지가 이는 정도(지면 종류별): 마른 맨흙·흙길이 가장 크고, 풀밭·숲 바닥은 작다
+const MUZZLE_DUST = { plowed: 1.2, road: 1.25, stubble: 1.0, sunflower: 0.7, forest: 0.55, fallow: 0.45, grass: 0.3 };
+
 const DUST_COLORS = {
   stubble: [0.63, 0.57, 0.45],
   plowed: [0.44, 0.37, 0.29],
@@ -167,6 +170,39 @@ export class Effects {
     }
   }
 
+  /** 엎드려쏴 총구 먼지: 총구 앞 지면에서 옆·앞으로 퍼지는 낮은 먼지 구름(1~3 s) */
+  _muzzleDust(x, y, z, col, k, d) {
+    const P = this.particles;
+    const n = Math.round(8 + 26 * k);
+    const sx = -d.z;
+    const sz = d.x;
+    for (let i = 0; i < n; i++) {
+      const side = (rng.next() - 0.5) * 2;
+      const fwd = 0.6 + rng.next() * 2.4;
+      const out = 1.2 + rng.next() * 3.2;
+      const shade = 1.1 + rng.next() * 0.25;
+      P.spawn({
+        x: x + d.x * rng.next() * 0.6 + sx * side * 0.15,
+        y: y + 0.03,
+        z: z + d.z * rng.next() * 0.6 + sz * side * 0.15,
+        vx: d.x * fwd + sx * side * out,
+        vy: 0.25 + rng.next() * 1.1,
+        vz: d.z * fwd + sz * side * out,
+        life: (1.1 + rng.next() * 1.8) * (0.7 + 0.5 * k),
+        size0: 0.12,
+        size1: (0.7 + rng.next() * 0.8) * (0.6 + 0.6 * k),
+        r: Math.min(1, col[0] * shade),
+        g: Math.min(1, col[1] * shade),
+        b: Math.min(1, col[2] * shade),
+        alpha: 0.55 + 0.35 * k,
+        kind: PK.DUST,
+        drag: 3.2,
+        gravity: 0.15,
+        wind: 1.0,
+      });
+    }
+  }
+
   _chips(x, y, z, col, n, speed, dir, size = 0.02, gravity = 9.8) {
     const P = this.particles;
     for (let i = 0; i < n; i++) {
@@ -322,14 +358,18 @@ export class Effects {
         drag: 4,
         gravity: -0.15,
       });
-    // 엎드려쏴: 총구 앞 흙먼지
+    // 엎드려쏴: 총구 폭풍(소염기는 옆·위로 가스를 뿜는다)이 마른 흙·짚 부스러기를 일으켜 잠깐 시야를 가린다.
+    // 총구가 땅에 가까울수록, 마른 맨흙일수록 크고, 바람에 흘러 흩어진다.
     if (e.stance === 'prone') {
-      const gx = m.x + d.x * 0.5;
-      const gz = m.z + d.z * 0.5;
-      const surf = this.world.terrain.surfaceAt(gx, gz);
-      if (surf === 'stubble' || surf === 'road' || surf === 'plowed') {
-        const gy = this.world.terrain.heightAt(gx, gz);
-        if (m.y - gy < 0.45) this._dust(gx, gy, gz, DUST_COLORS[surf], 0.55, { x: d.x * 2, z: d.z * 2 }, 7);
+      const gx = m.x + d.x * 0.35;
+      const gz = m.z + d.z * 0.35;
+      const gy = this.world.terrain.heightAt(gx, gz);
+      const hgt = m.y - gy;
+      if (hgt < 0.55) {
+        const surf = this.world.terrain.surfaceAt(gx, gz);
+        const dusty = MUZZLE_DUST[surf] ?? 0.5;
+        const k = dusty * (1 - hgt / 0.55);
+        if (k > 0.04) this._muzzleDust(gx, gy, gz, DUST_COLORS[surf] || DUST_COLORS.stubble, k, d);
       }
     }
     // 탄피 배출

@@ -145,6 +145,26 @@ void main() {
   gl_FragColor = vec4(vec3(mix(ao, 1.0, far)), 1.0);
 }`;
 
+// 철제 조준기 초점 흐림: 눈이 가늠쇠(0.45 m)에 초점을 맞추면 먼 풍경이 흐려진다. 반 해상도 분리 가우시안.
+const BLUR_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec2 uDir; // 표본 간격(uv)
+varying vec2 vUv;
+void main() {
+  vec3 c = texture2D(tSrc, vUv).rgb * 0.2270;
+  c += (texture2D(tSrc, vUv + uDir * 1.3846).rgb + texture2D(tSrc, vUv - uDir * 1.3846).rgb) * 0.3162;
+  c += (texture2D(tSrc, vUv + uDir * 3.2308).rgb + texture2D(tSrc, vUv - uDir * 3.2308).rgb) * 0.0703;
+  gl_FragColor = vec4(c, 1.0);
+}`;
+// 흐린 장면을 원래 장면 위에 섞어 그림(총을 그리기 전에 — 가늠쇠는 선명하게)
+const MIX_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+uniform float uAmount;
+varying vec2 vUv;
+void main() {
+  gl_FragColor = vec4(texture2D(tSrc, vUv).rgb, uAmount);
+}`;
+
 const FINAL_FRAG = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
@@ -272,6 +292,8 @@ export class Post {
       uAOTexel: { value: new THREE.Vector2() },
     });
     this.aoMat = mk(AO_FRAG, { tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uCam: { value: new THREE.Vector4() }, uRadius: { value: 0.6 } });
+    this.blurMat = mk(BLUR_FRAG, { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } });
+    this.mixMat = mk(MIX_FRAG, { tSrc: { value: null }, uAmount: { value: 0 } }, { transparent: true, blending: THREE.NormalBlending });
     this.raysOn = !!quality.bloom;
     this.raysMat = mk(RAYS_FRAG, { tSrc: { value: null }, uSun: { value: new THREE.Vector3() }, uAspect: { value: 1 }, uThr: { value: 1 } });
     this.finalMat.toneMapped = true;
@@ -289,6 +311,14 @@ export class Post {
     this.raysRT = null;
     if (this.aoRT) this.aoRT.dispose();
     this.aoRT = null;
+    for (const t of this.blurRT || []) t.dispose();
+    this.blurRT = [0, 1].map(() => {
+      const t = new THREE.WebGLRenderTarget(Math.max(4, w >> 1), Math.max(4, h >> 1), { type: THREE.HalfFloatType, depthBuffer: false });
+      t.texture.minFilter = THREE.LinearFilter;
+      t.texture.magFilter = THREE.LinearFilter;
+      t.texture.generateMipmaps = false;
+      return t;
+    });
     if (this.aoOn) {
       this.aoRT = new THREE.WebGLRenderTarget(Math.max(4, w >> 1), Math.max(4, h >> 1), { depthBuffer: false });
       this.aoRT.texture.minFilter = THREE.LinearFilter;
@@ -349,6 +379,32 @@ export class Post {
     r.setRenderTarget(prev);
     r.autoClear = autoClear;
     this._aoReady = true;
+  }
+
+  /**
+   * 초점 흐림(철제 조준기): 장면(총 제외)을 반 해상도로 흐려 amount(0~1)만큼 덮는다. 총을 그리기 전에 호출.
+   * @param {number} amount 섞는 정도
+   * @param {number} radiusPx 흐림 반경(전체 해상도 화소, 대략)
+   */
+  focusBlur(amount, radiusPx = 3) {
+    if (!this.enabled || amount <= 0.01) return;
+    const r = this.renderer;
+    const prev = r.getRenderTarget();
+    const autoClear = r.autoClear;
+    r.autoClear = false;
+    const [a, b] = this.blurRT;
+    const k = radiusPx / 4.5; // 반 해상도 표본 간격
+    this.blurMat.uniforms.tSrc.value = this.scene.texture;
+    this.blurMat.uniforms.uDir.value.set(k / a.width, 0);
+    this._pass(this.blurMat, a);
+    this.blurMat.uniforms.tSrc.value = a.texture;
+    this.blurMat.uniforms.uDir.value.set(0, k / b.height);
+    this._pass(this.blurMat, b);
+    this.mixMat.uniforms.tSrc.value = b.texture;
+    this.mixMat.uniforms.uAmount.value = Math.min(1, amount);
+    this._pass(this.mixMat, this.scene);
+    r.setRenderTarget(prev);
+    r.autoClear = autoClear;
   }
 
   /** 해의 화면 위치(uv)와 세기(카메라가 해를 향한 정도) */

@@ -112,6 +112,7 @@ export class Game {
     this.weaponModel = new WeaponModel(this.weapon.data);
     this.weaponScene.add(this.weaponModel.root);
     this.optic = new OpticOverlay(document.getElementById('optic'));
+    this.restMark = document.getElementById('rest-mark');
     this.effects = new Effects(this.scene, this.world, this.events, this.audio);
 
     await step('적을 배치하는 중…');
@@ -263,13 +264,21 @@ export class Game {
 
     // 무기 모델
     const wm = this.weaponModel;
-    if (wm.sight !== this.weapon.sightKey) wm.setSight(this.weapon.sightKey);
+    if (wm.sight !== this.weapon.sightKey || wm.apertureD !== this.weapon.apertureDiameter) wm.setSight(this.weapon.sightKey, this.weapon.apertureDiameter);
     wm.root.position.copy(pose.weaponPos);
     wm.root.quaternion.copy(pose.weaponQuat);
     wm.animate(this.weapon.anim);
     wm.setAds(this.weapon.adsEased);
     const opticAlpha = S.type === 'optic' ? smoothstep(0.82, 0.98, a) : 0;
     wm.root.visible = opticAlpha < 0.6 && !this.debugCam;
+    // 철제 조준기: 눈이 가늠쇠에 초점 → 먼 풍경이 약간 흐림
+    this._focus = S.type === 'iron' && !this.debugCam ? smoothstep(0.45, 1, a) * 0.85 : 0;
+    // 거치 표시(아주 작게)
+    const restOn = !!this.weapon.rest && a > 0.5 && !this.debugCam;
+    if (restOn !== this._restShown) {
+      this._restShown = restOn;
+      this.restMark.classList.toggle('hidden', !restOn);
+    }
 
     // 세계
     this.enemies.update(dt);
@@ -287,15 +296,16 @@ export class Game {
     this.audio.update(dt, cam.position, cam.quaternion, this.time);
     this._breathing();
 
-    // 조준경
+    // 조준경: 눈이 광축에서 벗어난 정도(아이박스 대비) → 가장자리 그림자·좁아지는 시야
     const kick = this.weapon.aim.modelKick;
+    const eyeBox = S.eyeBox || 0.006;
     this.optic.draw({
       alpha: this.debugCam ? 0 : opticAlpha,
       fovDeg: fov,
       trueFovDeg: S.trueFovDeg || 7,
       bdc: this.weapon.bdc,
-      offsetX: this.weapon.aim.cameraShakeRoll * 900 + this.weapon.obs.yaw * 300,
-      offsetY: -kick * 700 + this.weapon.aim.cameraShakePitch * 600,
+      eyeX: this.weapon.aim.eyeOff.x / eyeBox + this.weapon.obs.yaw * 20,
+      eyeY: this.weapon.aim.eyeOff.y / eyeBox - kick * 25,
     });
     inp.endFrame();
   }
@@ -326,6 +336,7 @@ export class Game {
     r.clear();
     r.render(this.scene, this.camera);
     this.post.computeAO(this.camera);
+    this.post.focusBlur(this._focus || 0, 2.6 * (this.renderer.domElement.height / 1080));
     r.setRenderTarget(this.post.target);
     if (this.weaponModel.root.visible) {
       r.clearDepth();

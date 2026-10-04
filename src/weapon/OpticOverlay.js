@@ -22,7 +22,8 @@ export class OpticOverlay {
   }
 
   /**
-   * @param {object} o {alpha, fovDeg(세로), trueFovDeg, bdc:[{range,hold,halfWidth}], offsetX, offsetY(px, 눈 위치 어긋남), shake}
+   * @param {object} o {alpha, fovDeg(세로), trueFovDeg, bdc:[{range,hold,halfWidth}], eyeX, eyeY(눈 위치 어긋남 / 아이박스)}
+   * 아이박스: 눈이 광축에서 아이박스(6 mm)만큼 벗어나면 가장자리에 그림자 초승달이 뚜렷해지고 보이는 원이 좁아진다.
    */
   draw(o) {
     const c = this.canvas;
@@ -49,9 +50,14 @@ export class OpticOverlay {
     const pxPerTan = H / 2 / tanHalf;
     const cx = W / 2;
     const cy = H / 2;
-    const R = Math.tan((o.trueFovDeg * Math.PI) / 360) * pxPerTan;
-    const ex = cx + (o.offsetX || 0);
-    const ey = cy + (o.offsetY || 0);
+    const R0 = Math.tan((o.trueFovDeg * Math.PI) / 360) * pxPerTan;
+    const k = R0 * 0.12; // 아이박스 1만큼 어긋날 때 화소
+    const offX = (o.eyeX || 0) * k;
+    const offY = (o.eyeY || 0) * k;
+    const ratio = Math.hypot(o.eyeX || 0, o.eyeY || 0);
+    const R = R0 * (1 - 0.2 * Math.min(1.5, ratio));
+    const ex = cx + offX;
+    const ey = cy + offY;
 
     // 경통 그림자(눈이 광축에서 벗어나면 초승달 그림자)
     ctx.save();
@@ -68,18 +74,20 @@ export class OpticOverlay {
     ctx.beginPath();
     ctx.arc(ex, ey, R * 1.01, 0, Math.PI * 2);
     ctx.fill();
-    const mis = Math.hypot(o.offsetX || 0, o.offsetY || 0);
-    if (mis > 0.5) {
-      // 어긋난 반대편에 그림자 초승달
-      const sx = cx - (o.offsetX || 0) * 2.2;
-      const sy = cy - (o.offsetY || 0) * 2.2;
-      ctx.globalCompositeOperation = 'source-atop';
-      ctx.fillStyle = `rgba(0,0,0,${Math.min(0.9, mis / 25)})`;
+    if (ratio > 0.05) {
+      // 그림자 초승달: 보이는 원 안에서, 어긋난 쪽 가장자리부터 어둡게 밀려 들어온다
+      const sx = cx - offX * 2.2;
+      const sy = cy - offY * 2.2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(ex, ey, R * 1.01, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = `rgba(0,0,0,${Math.min(0.92, ratio * 0.8)})`;
       ctx.beginPath();
       ctx.rect(0, 0, W, H);
       ctx.arc(sx, sy, R * 1.02, 0, Math.PI * 2, true);
       ctx.fill('evenodd');
-      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
     }
     ctx.restore();
 

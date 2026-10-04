@@ -1,6 +1,8 @@
 // 무기 시스템: 사격 통제(단발/연발, 발사 속도), 약실·탄창, 재장전(전술/급속/탄 소진),
 // 탄창 확인, 조정간, 조준기 교체, 조준(ADS) 전환, 질주 시 총 내림, 총 길이에 의한 걸림.
 // 탄은 총열 방향(조준선 + 영점 앙각)으로, 실제 총구 위치에서 나간다(크로스헤어 없음).
+// 거치: 총 앞손 받침 바로 밑에 흙(둔덕·배수로 둑)·통나무·뿌리판·짚 더미가 있거나 옆에 줄기가 닿으면 흔들림이 줄어든다.
+// 총열 과열: 발마다 온도가 오르고 천천히 식는다. 뜨거우면 분산이 커지고 탄착점이 조금 이동한다.
 
 import * as THREE from 'three';
 import { stemCenterAt, stemRadiusAt } from '../world/stemShape.js';
@@ -12,6 +14,7 @@ import { clamp, damp, lerp, smoothstep } from '../core/math.js';
 import { rng } from '../core/Random.js';
 import { Magazines } from './Magazines.js';
 import { AimModel } from './AimModel.js';
+import { pointSegDistance } from '../physics/intersect.js';
 import {
   BallisticModel,
   solveZeroElevation,
@@ -93,6 +96,12 @@ export class WeaponSystem {
     this.rPressAt = -1;
     this.shotsFired = 0;
     this.lastShotTime = -10;
+    this.aperture = 0;
+    this.rest = null; // {kind, name} — 거치 중이면
+    this.barrelHeat = 0; // 주위 온도보다 높은 정도(°C)
+    const a = rng.range(-0.6, 0.6) + Math.PI / 2; // 과열 탄착점 이동 방향(총마다, 대개 위쪽)
+    this.heatShiftDir = [Math.cos(a), Math.sin(a)];
+    this.lastJerk = 0;
   }
 
   get sight() {
@@ -142,10 +151,38 @@ export class WeaponSystem {
   }
 
   // -------------------------------------------------------------------------
+  /** V: 광학 → 철제(작은 구멍) → 철제(큰 구멍) → 광학 */
   switchSight() {
-    this.sightKey = this.sightKey === 'optic4x' ? 'iron' : 'optic4x';
-    this.toast(`조준기: ${this.sight.name}`);
-    this.events.emit('weapon:sight', { sight: this.sightKey });
+    const ap = this.data.sights.iron.apertures;
+    if (this.sightKey === 'optic4x') {
+      this.sightKey = 'iron';
+      this.aperture = 0;
+    } else if (this.aperture < ap.length - 1) this.aperture++;
+    else {
+      this.sightKey = 'optic4x';
+      this.aperture = 0;
+    }
+    this.toast(this.sightKey === 'iron' ? `조준기: ${this.sight.name} · ${ap[this.aperture].name}` : `조준기: ${this.sight.name}`);
+    this.events.emit('weapon:sight', { sight: this.sightKey, aperture: this.aperture });
+  }
+
+  get apertureDiameter() {
+    return this.data.sights.iron.apertures[this.aperture].diameter;
+  }
+
+  /** 총열 과열에 따른 분산 배수 */
+  get heatDispersionMul() {
+    const B = this.data.barrel;
+    return 1 + Math.min(B.dispersionMax, Math.max(0, this.barrelHeat - B.dispersionFrom) * B.dispersionPerDeg);
+  }
+
+  /** 현재 총+탄 분산(축별 표준편차, MOA) */
+  get dispersionMoa() {
+    return this.ammo.dispersionSigmaMoa * this.heatDispersionMul;
+  }
+
+  get barrelTemp() {
+    return this.data.barrel.ambient + this.barrelHeat;
   }
 
   _startAction(type, kind, dur, events = []) {
@@ -328,15 +365,27 @@ export class WeaponSystem {
       // 노리쇠가 닫힌 빈 약실에서 방아쇠
     }
 
+    // 총열 냉각
+    this.barrelHeat *= Math.exp(-dt / this.data.barrel.coolTau);
+
+    // 거치
+    const rest = this._detectRest();
+    if ((rest && rest.kind) !== (this.rest && this.rest.kind)) {
+      this.rest = rest;
+      if (rest && this.ads > 0.5) this.events.emit('weapon:rest', { kind: rest.kind });
+    }
+
     // 반동·흔들림
     this.aim.update(dt, {
       stance: p.transition ? p.transition.to : p.stance,
+      transition: !!p.transition,
       ads: this.ads,
       exertion: p.exertion,
       heartRate: p.heart,
       breathRate: p.breathRate,
       stamina: p.stamina,
       speed: p.speed,
+      rest: this.rest && this.ads > 0.3 ? this.rest.kind : null,
     });
     const [ry, rp] = this.aim.consumeResidual();
     p.yaw += ry;
@@ -367,10 +416,18 @@ export class WeaponSystem {
     // 총구 위치·총열 방향(조준선 대비 영점 앙각)
     const muzzle = this._worldPoint(this.data.geometry.muzzle, this.muzzleWorld);
     const el = this.zeroEl[this.sightKey];
-    // 산포(총+탄): 축별 정규분포
-    const sigma = (this.ammo.dispersionMRMoa * MOA) / 1.2533;
-    const dp = el + rng.gauss() * sigma;
-    const dy = rng.gauss() * sigma;
+    // 산포(총+탄): 축별 정규분포, 총열이 달아오르면 커지고 탄착점이 한쪽으로 이동
+    const B = this.data.barrel;
+    const sigma = this.dispersionMoa * MOA;
+    const shift = Math.max(0, this.barrelHeat - B.dispersionFrom) * B.shiftPerDeg * MOA;
+    // 급한 격발(단발로 이전 발 직후 방아쇠를 서둘러 당김): 격발 순간 총이 흔들린다
+    const T = this.data.sway.trigger;
+    const haste = this.fireMode === 'semi' ? clamp(1 - (this.time - this.lastShotTime) / T.hasteWindow, 0, 1) : 0;
+    const [jy, jp] = this.aim.triggerJerk(stance, haste, !!this.rest);
+    this.lastJerk = haste;
+    const dp = el + rng.gauss() * sigma + shift * this.heatShiftDir[1] + jp;
+    const dy = rng.gauss() * sigma + shift * this.heatShiftDir[0] + jy;
+    this.barrelHeat += B.heatPerShot;
     // 공력 도약: 총구에서의 횡풍 성분
     const wind = { x: 0, y: 0, z: 0 };
     this.world.wind.sample(muzzle.x, muzzle.y, muzzle.z, this.world.time || 0, wind);
@@ -404,6 +461,40 @@ export class WeaponSystem {
       weaponQuat: this.qW.clone(),
       lastRound: !this.mags.inserted || this.mags.inserted.rounds === 0,
     });
+  }
+
+  /**
+   * 거치 판정: 앞손 받침(총 좌표 supportHand) 바로 밑에 흙·통나무·뿌리판·짚 더미가 있거나(위에 얹힘),
+   * 옆에 나무 줄기가 닿으면(기대기) 거치. 움직이거나 자세를 바꾸는 중에는 안 됨.
+   */
+  _detectRest() {
+    const p = this.player;
+    if (p.transition || p.speed > 0.35 || this.lowered > 0.1 || this.action) return null;
+    const S = this._worldPoint(this.data.geometry.supportHand, this._restP || (this._restP = new THREE.Vector3()));
+    const w = this.world;
+    // 받침과 손 사이 허용 간격: 엎드려는 거의 닿아야 하고, 무릎·서서는 받침 높이에 맞춰 몸을 낮추거나 숙인다고 본다
+    const reach = p.stance === 'prone' ? 0.09 : p.stance === 'crouch' ? 0.3 : 0.2;
+    // 흙(둔덕 위·배수로 둑 턱): 엎드려 평지에서는 손 받침이 지면 위 약 0.17 m라 걸치지 않는다
+    const clear = S.y - w.terrain.heightAt(S.x, S.z);
+    if (clear > -0.03 && clear < reach) return { kind: 'ground', name: '흙' };
+    const out = this._q;
+    w.hash.query(S.x - 1.2, S.z - 1.2, S.x + 1.2, S.z + 1.2, out);
+    for (const o of out) {
+      if (o.kind === 'log' || o.kind === 'bale' || o.kind === 'rootPlate' || (o.kind === 'limb' && o.r >= 0.05)) {
+        const r = pointSegDistance(S.x, S.y, S.z, o.ax, o.ay, o.az, o.bx - o.ax, o.by - o.ay, o.bz - o.az);
+        const cy = o.ay + (o.by - o.ay) * r.t;
+        const rad = o.kind === 'log' ? lerp(o.r, o.r2, r.t) : o.r;
+        const d = r.d - rad;
+        if (d > -0.03 && d < reach && S.y > cy) return { kind: o.kind, name: o.kind === 'bale' ? '짚 더미' : o.kind === 'rootPlate' ? '뿌리판' : '통나무' };
+      } else if (o.kind === 'trunk') {
+        const hb = S.y - o.y0;
+        if (hb < 0.05 || hb > o.top - o.y0) continue;
+        const c = stemCenterAt(o, hb, this._sc || (this._sc = { x: 0, z: 0 }));
+        const d = Math.hypot(S.x - c.x, S.z - c.z) - stemRadiusAt(o, hb);
+        if (d > -0.03 && d < 0.13) return { kind: 'trunk', name: '나무 줄기' };
+      }
+    }
+    return null;
   }
 
   _animate(dt) {
