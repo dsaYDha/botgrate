@@ -37,6 +37,7 @@ export class OpticOverlay {
       c.style.display = 'block';
       this.visible = true;
     }
+    if (window.innerWidth !== this.w || window.innerHeight !== this.h) this.resize();
     const ctx = this.ctx;
     const dpr = this.dpr;
     const W = this.w;

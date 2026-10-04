@@ -48,7 +48,10 @@ export class Game {
     };
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1) * this.quality.pixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    // 표시 크기는 CSS(화면 가득)가 정하고, 그리기 버퍼만 맞춘다(틀 크기가 바뀌어도 빈 공간이 생기지 않게)
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    this._vw = window.innerWidth;
+    this._vh = window.innerHeight;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.92;
@@ -301,6 +304,8 @@ export class Game {
   }
 
   render() {
+    // 공유 페이지 틀처럼 resize 이벤트 없이 크기가 바뀌는 경우도 매 프레임 확인
+    if (window.innerWidth !== this._vw || window.innerHeight !== this._vh) this.onResize();
     const r = this.renderer;
     r.info.reset();
     r.clear();
@@ -314,10 +319,13 @@ export class Game {
   onResize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
+    if (!w || !h) return;
+    this._vw = w;
+    this._vh = h;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.weaponCamera.aspect = w / h;
     this.weaponCamera.updateProjectionMatrix();
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
   }
 }
