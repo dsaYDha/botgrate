@@ -259,12 +259,9 @@ export class Shooter {
     b.exposure = e.vis ? e.vis.frac : 0;
     b.knownErr = K ? K.err : null;
     b.knownFor = K && K.firstAware >= 0 && this.ctx.time ? this.ctx.time() - K.firstAware : null;
-    // 탄 소모
+    // 탄 소모(탄창이 비면 약실의 마지막 한 발)
     if (this.mag > 0) this.mag--;
     else this.chambered = false;
-    if (this.mag === 0 && this.chambered) {
-      // 약실 마지막 한 발 남음
-    }
     this.shots++;
     this.lastShot = this.time;
     const stance = e.stance === 'prone' ? 'prone' : e.stance === 'kneel' ? 'crouch' : 'stand';

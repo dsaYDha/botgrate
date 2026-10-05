@@ -21,6 +21,7 @@ import { MOVEMENT } from '../src/data/movement.js';
 import { EventBus } from '../src/core/EventBus.js';
 import { rng } from '../src/core/Random.js';
 
+rng.s = Number(process.env.PERC_SEED || 20261005) >>> 0; // 같은 결과가 나오게(PERC_SEED로 바꿔 볼 수 있음)
 const TRIALS = Number(process.env.PERC_TRIALS || 60);
 const MAXT = 90; // s
 const DT = 0.05;
@@ -245,7 +246,8 @@ const checks = [
   ['5 하늘 배경 400 m: 알아봄 중앙값 10 s 이하', by('5 ').l <= 10],
   ['3 잎 뒤 엎드려 정지: 90 s 안에 알아봄 5 % 이하', within(by('3 ').r.located, MAXT) <= 0.05],
   ['2 서서 정지가 1 서서 이동보다 늦음', by('2 ').l > by('1 ').l],
-  ['4 사격 중: 추정 오차가 첫 발보다 마지막 발 뒤에 작음', errLine[N - 1] < errLine[0] && radLine[N - 1] < radLine[0]],
+  ['4 사격 중: 10발 뒤 실제 추정 오차와 아는 오차 반지름이 첫 발의 절반 이하', errLine[N - 1] <= errLine[0] * 0.5 && radLine[N - 1] <= radLine[0] * 0.5],
+  ['4 사격 중: 실제 오차가 적이 아는 2σ 반지름 안(과신하지 않음)', errLine.every((v, i) => v <= radLine[i])],
 ];
 console.log('');
 let ok = true;

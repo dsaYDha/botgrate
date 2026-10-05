@@ -79,8 +79,11 @@ export class Particles {
           vLight = sun;
           vCol.rgb *= 1.0;
           gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-          // 하늘빛 가림은 색에 미리 반영
-          vCol.a *= 1.0;
+          // 카메라 코앞(1 m 안팎)의 먼지·연기는 초점이 안 맞아 흐릿한 막일 뿐: 빌보드 한 장이 화면을 덮지 않게 흐리게
+          if (kind < 0.5 || (kind > 2.5 && kind < 3.5)) {
+            float camD = length(aPos.xyz - cameraPosition);
+            vCol.a *= smoothstep(0.35, 0.6 + aPos.w * 1.2, camD);
+          }
           vCol.rgb = vCol.rgb * (uSunColor * uSunIntensity * (0.55 + 0.45 * sun) * sun + mix(uHemiGround, uHemiSky, 0.7) * uHemiIntensity * sky) * 0.3183;
           if (kind > 3.5) vCol.rgb = aCol.rgb * 3.0;
         }`,

@@ -34,6 +34,10 @@ export const BEHAVIOR = {
   suppressMaxErr: 70, // 이보다 오차가 크면 제압 사격도 안 함(탄 낭비)
   returnFireMaxErr: 260, // 다만 우리가 맞고 있으면 이 오차까지는 짐작한 쪽으로 드문 응사
   ammoReserve: 2, // 예비 탄창이 이만큼 남으면 제압 사격을 아낀다
+  // 사격 통제: 새 정보(보거나 들은 것)도, 우리 쪽으로 오는 탄도 이만큼(s) 없으면 제압 사격을 멈추고 지켜본다.
+  // 우리 편이 움직이는 동안(측면 기동·짝 교대 약진)은 엄호 사격을 더 오래 유지한다.
+  ceaseFire: 25,
+  ceaseFireCover: 75,
 };
 
 export class Brain {
@@ -131,8 +135,9 @@ export class Brain {
     const e = this.e;
     e.unit?.onUnderFire();
     if (info.dir) {
-      // 탄이 날아온 방향: 탄 경로를 거슬러 올라간 쪽(정확한 사수 위치는 모른다)
-      this.fireDir = { x: -info.dir.x, z: -info.dir.z, t: this.time };
+      // 탄이 날아온 쪽: 딱 소리·스치는 소리·뒤쪽 탄착으로 대강(σ 25°) 안다 — 정확한 사수 위치는 모른다
+      const a = Math.atan2(-info.dir.x, info.dir.z) + rng.gauss() * 0.44;
+      this.fireDir = { x: Math.sin(a), z: -Math.cos(a), t: this.time };
     }
     if (!this.reactInfo || this.time > this.reactAt + 2) this._startReaction(info, 1);
   }
@@ -496,6 +501,8 @@ export class Brain {
     const underFire = e.unit && this.ctx.time() - e.unit.lastUnderFire < 20;
     const roughOk = underFire && K.err <= BEHAVIOR.returnFireMaxErr;
     if (K.err > BEHAVIOR.suppressMaxErr && !roughOk) return null;
+    const quiet = this.ctx.time() - Math.max(K.lastObs, e.unit ? e.unit.lastUnderFire : -1e9);
+    if (quiet > (this._covering() ? BEHAVIOR.ceaseFireCover : BEHAVIOR.ceaseFire)) return null;
     if (sh.spare <= BEHAVIOR.ammoReserve && rng.next() < 0.7) return null;
     const d = Math.hypot(K.x - e.x, K.z - e.z);
     if (d > BEHAVIOR.maxRange * 1.2) return null;
@@ -508,6 +515,14 @@ export class Brain {
     if (rough) this.nextSuppress += rng.range(4, 9); // 막연한 응사는 더 드물게
     this.supT = { point: { x: q.x, y: gy + rng.range(0.3, 1.0), z: q.z }, burst, shots0: sh.shots, until: this.time + 4 + burst * 0.2 };
     return { mode: 'suppress', point: this.supT.point, burst };
+  }
+
+  /** 우리 편이 움직이는 중인가(엄호 사격을 이어 갈 이유) */
+  _covering() {
+    const t = this.task;
+    if (t.type === 'move' && t.mode !== 'withdraw') return true; // 짝 교대 약진: 서 있는 짝이 엄호
+    const p = this.e.unit && this.e.unit.plan;
+    return !!(p && p.kind === 'fire-move' && p.dest && !p.arrived && p.maneuver !== this.e.teamId);
   }
 
   // ---------------------------------------------------------------------------

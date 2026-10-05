@@ -403,14 +403,19 @@ export class AudioEngine {
 
   /**
    * 탄 스침: 초음속이면 '딱'을 마하 원뿔 방출점(탄 경로 위, 최근접점보다 사수 쪽)에서, 충격파가 닿는 시각에.
-   * 세기는 과압 ∝ 거리^(−3/4), 가까울수록 N파가 짧아 날카롭다. 아음속이면 '휙'(가까울 때만).
+   * N파(Whitham): 과압 ∝ (M²−1)^(1/8) · r^(−3/4), 길이 ∝ M · r^(1/4) / (M²−1)^(3/8).
+   * 가까울수록, 빠를수록 짧고 날카롭다. 음속에 가까워진 탄(먼 거리)은 약하고 둔하다. 아음속이면 '휙'(가까울 때만).
    */
   playFlyby(e) {
     if (!this.ready) return;
     const r = Math.max(0.3, e.distance);
     if (e.supersonic) {
-      const buf = r < 2 ? this.bank.crack.near : r < 10 ? this.bank.crack.mid : this.bank.crack.far;
-      const gain = Math.min(6, 9 * Math.pow(1 / r, 0.75));
+      const M = Math.max(1.0005, e.speed / C);
+      const m2 = M * M - 1;
+      // N파 길이(마하 2·1 m 기준 1): 1.19 이하 '가까이', 1.78 이하 '중간'(마하 2에서 2 m·10 m에 해당)
+      const len = (M * Math.pow(r, 0.25)) / Math.pow(m2, 0.375) / 1.32;
+      const buf = len < 1.19 ? this.bank.crack.near : len < 1.78 ? this.bank.crack.mid : this.bank.crack.far;
+      const gain = Math.min(6, 9 * Math.pow(1 / r, 0.75) * (Math.pow(m2, 0.125) / 1.03));
       this.propagate(buf, e.emit, { gain, ref: 1, reverb: 0.35, noDelay: true, delay: e.delay, belts: false });
     } else if (r < 6) {
       this.propagate(this.bank.whiz, e.emit, { gain: 1.4 / Math.max(0.5, r), ref: 1, reverb: 0.1, noDelay: true, delay: e.delay, rate: 0.9 + rng.next() * 0.2, belts: false });

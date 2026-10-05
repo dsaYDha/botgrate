@@ -69,22 +69,151 @@ export class ThreatKnowledge {
 
   /**
    * 관측 반영. 오차는 방위 방향(lat)과 거리 방향(rad)의 표준편차로 받는다.
-   * @param {number} x 관측 위치
+   * 관측자 위치(ox, oz)를 주면 관측자 기준 극좌표(방위·거리)에서 합친다: 한 자리에서 보고 들은 것은
+   * '그 방향, 그 거리쯤'이라는 호(弧) 모양 정보다. 직교좌표 타원으로 합치면 방위가 조금씩 다른 관측의 얇은
+   * 타원이 엉뚱한 곳에서 교차해(같은 자리에서 하는 가짜 삼각측량) 오차를 과신하게 된다.
+   * @param {number} x 관측 위치(관측자 + 방향 × 추정 거리)
    * @param {number} z
-   * @param {number} sLat 옆(방위) 표준편차(m)
+   * @param {number} sLat 옆(방위) 표준편차(m, 관측 거리에서)
    * @param {number} sRad 앞뒤(거리) 표준편차(m)
    * @param {number} ux 관측자 → 관측 위치 단위벡터
    * @param {number} uz
+   * @param {number} floor 방위 오차 하한(m, 관측 거리에서): 같은 방향에서 거듭 들은 소리는 오차가 서로 묶여 있다
+   * @param {number} ox 관측자 위치
+   * @param {number} oz
+   * @param {number} rangeFloor 거리 오차 하한(m): 같은 사람의 거리 눈대중 치우침처럼 매번 같은 쪽으로 틀리는 오차
    */
-  observe(x, z, sLat, sRad, ux, uz, now, source, floor = 0) {
+  observe(x, z, sLat, sRad, ux, uz, now, source, floor = 0, ox = NaN, oz = NaN, rangeFloor = 0) {
+    this.obsCount++;
+    this.lastSource = source;
+    const r1 = Math.hypot(x - ox, z - oz);
+    const r0 = this.has ? Math.hypot(this.x - ox, this.z - oz) : Infinity;
+    if (r1 > 3 && r0 > 3) this._observePolar(ox, oz, Math.atan2(ux, -uz), r1, Math.atan2(sLat, r1), sRad, floor > 0 ? Math.atan2(floor, r1) : 0, rangeFloor / r1);
+    else this._observeXY(x, z, sLat, sRad, ux, uz, floor);
+    this.lastObs = now;
+    if (this.firstAware < 0) this.firstAware = now;
+  }
+
+  /**
+   * 합친 추정을 지형지물에 맞춤: 그 방위의 숲 가장자리(법선 nx, nz)까지 거리 r로.
+   * 결과는 '그 가장자리 위 어딘가': 오차 타원을 가장자리를 따라 눕힌다 — 가장자리에 수직인 쪽은 sr,
+   * 가장자리를 따라서는 방위 오차가 그 가장자리 위에서 번지는 길이(비스듬히 볼수록 길다).
+   * 가장자리 짐작의 오차는 매번 같은 쪽이라(같은 가장자리) 거듭 맞춰도 sr 밑으로 줄지 않는다.
+   * 관측마다 가장자리에 맞추지 않는 이유: 방위가 크게 빗나간 관측이 다른 숲띠(직각으로 놓인 띠)에 붙으면
+   * 두 가장자리의 교점(엉뚱한 모서리)으로 끌려간다 — 먼저 방위·거리를 합치고, 합친 방위로 '저 숲 가장자리'를 고른다.
+   */
+  snapRange(ox, oz, r, sr, nx, nz) {
+    if (!this.has) return;
+    const p = this._toPolar(ox, oz);
+    if (!p) return;
+    const ux = Math.sin(p.b);
+    const uz = -Math.cos(p.b);
+    const c = Math.abs(ux * nx + uz * nz);
+    const sb = Math.min(1.2, Math.sqrt(p.bb));
+    const along = Math.min((r * Math.tan(sb)) / Math.max(0.3, c), 3 * r);
+    const tx = -nz;
+    const tz = nx;
+    const a2 = along * along;
+    const n2 = sr * sr;
+    this._set(ox + ux * r, oz + uz * r, a2 * tx * tx + n2 * nx * nx, a2 * tx * tz + n2 * nx * nz, a2 * tz * tz + n2 * nz * nz);
+  }
+
+  /**
+   * 극좌표 칼만. 상태는 (방위 b, 로그 거리 l = ln r): 사람의 거리 눈대중 오차는 거리에 비례(로그정규)라서,
+   * 거리를 그대로 합치면 짧게 들은 관측이 '오차가 작다'며 과하게 반영돼 추정이 가까운 쪽으로 끌려간다.
+   * 관측 (b1 ± sb, r1 ± sr), 방위 하한 fb(rad), 로그 거리 하한 fl.
+   */
+  _observePolar(ox, oz, b1, r1, sb, sr, fb, fl = 0) {
+    const l1 = Math.log(r1);
+    const sl = sr / r1;
+    const p = this.has ? this._toPolar(ox, oz) : null;
+    if (!p) {
+      this._setPolar(ox, oz, b1, l1, Math.max(sb, fb) ** 2, 0, sl * sl);
+      return;
+    }
+    const { b: b0, l: l0, bb, bl, ll } = p;
+    // 혁신(방위는 ±π로 감음), S = P + R
+    let yb = b1 - b0;
+    yb = Math.atan2(Math.sin(yb), Math.cos(yb));
+    const yl = l1 - l0;
+    const sbb = bb + sb * sb;
+    const sll = ll + sl * sl;
+    const det = sbb * sll - bl * bl;
+    if (det <= 1e-14) {
+      this._setPolar(ox, oz, b1, l1, Math.max(sb, fb) ** 2, 0, sl * sl);
+      return;
+    }
+    const ibb = sll / det;
+    const ibl = -bl / det;
+    const ill = sbb / det;
+    const d2 = yb * (ibb * yb + ibl * yl) + yl * (ibl * yb + ill * yl);
+    if (d2 > KNOWLEDGE.gateSigma2) {
+      // 표적이 옮겨 갔다: 새 관측으로 바꿈
+      this._setPolar(ox, oz, b1, l1, Math.max(sb, fb) ** 2, 0, sl * sl);
+      return;
+    }
+    // K = P S⁻¹, P' = (I − K) P
+    const kbb = bb * ibb + bl * ibl;
+    const kbl = bb * ibl + bl * ill;
+    const klb = bl * ibb + ll * ibl;
+    const kll = bl * ibl + ll * ill;
+    const b = b0 + kbb * yb + kbl * yl;
+    const l = l0 + klb * yb + kll * yl;
+    let nbb = Math.max(1e-8, (1 - kbb) * bb - kbl * bl);
+    let nbl = (1 - kbb) * bl - kbl * ll;
+    let nll = Math.max(1e-6, -klb * bl + (1 - kll) * ll);
+    if (fl > 0 && nll < fl * fl) {
+      nbl *= fl / Math.sqrt(nll);
+      nll = fl * fl;
+    }
+    // 같은 방향에서 거듭 들은 소리는 오차가 서로 묶여 있어(딱 소리 혼동·메아리) 방위 오차가 무한히 줄지 않는다
+    if (fb > 0 && nbb < fb * fb) {
+      nbl *= fb / Math.sqrt(nbb);
+      nbb = fb * fb;
+    }
+    this._setPolar(ox, oz, b, l, nbb, nbl, nll);
+  }
+
+  /** 현재 추정을 관측자 기준 (방위, 로그 거리)와 그 공분산으로 */
+  _toPolar(ox, oz) {
+    const dx = this.x - ox;
+    const dz = this.z - oz;
+    const r = Math.hypot(dx, dz);
+    if (r < 1) return null;
+    // 거리 방향 u, 방위가 커지는 방향 t. ∂b = t·d / r, ∂l = u·d / r
+    const ux = dx / r;
+    const uz = dz / r;
+    const tx = -uz;
+    const tz = ux;
+    const q = (ax, az, bx, bz) => ax * (this.pxx * bx + this.pxz * bz) + az * (this.pxz * bx + this.pzz * bz);
+    const r2 = r * r;
+    return { b: Math.atan2(dx, -dz), l: Math.log(r), bb: q(tx, tz, tx, tz) / r2, bl: q(tx, tz, ux, uz) / r2, ll: q(ux, uz, ux, uz) / r2 };
+  }
+
+  /** (방위 b, 로그 거리 l)와 그 공분산 → 직교좌표 평균·공분산(야코비안 J = ∂(x,z)/∂(b,l)) */
+  _setPolar(ox, oz, b, l, bb, bl, ll) {
+    const r = Math.exp(Math.min(l, 9));
+    const s = Math.sin(b);
+    const c = Math.cos(b);
+    const j11 = r * c;
+    const j12 = r * s;
+    const j21 = r * s;
+    const j22 = -r * c;
+    const a11 = j11 * bb + j12 * bl;
+    const a12 = j11 * bl + j12 * ll;
+    const a21 = j21 * bb + j22 * bl;
+    const a22 = j21 * bl + j22 * ll;
+    this._set(ox + r * s, oz - r * c, Math.max(0.01, a11 * j11 + a12 * j12), a11 * j21 + a12 * j22, Math.max(0.01, a21 * j21 + a22 * j22));
+  }
+
+  /** 직교좌표 칼만(관측자가 표적 바로 옆일 때만) */
+  _observeXY(x, z, sLat, sRad, ux, uz, floor) {
     // 관측 공분산 R = U diag(rad², lat²) Uᵀ (U = [u, n])
     const r2 = sRad * sRad;
     const l2 = sLat * sLat;
     const rxx = r2 * ux * ux + l2 * uz * uz;
     const rxz = (r2 - l2) * ux * uz;
     const rzz = r2 * uz * uz + l2 * ux * ux;
-    this.obsCount++;
-    this.lastSource = source;
     if (!this.has) {
       this._set(x, z, rxx, rxz, rzz);
     } else {
@@ -103,17 +232,14 @@ export class ThreatKnowledge {
         const izz = sxx / det;
         const d2 = yx * (ixx * yx + ixz * yz) + yz * (ixz * yx + izz * yz);
         if (d2 > KNOWLEDGE.gateSigma2) {
-          // 표적이 옮겨 갔다: 새 관측으로 바꿈
           this._set(x, z, rxx, rxz, rzz);
         } else {
-          // K = P S⁻¹
           const kxx = this.pxx * ixx + this.pxz * ixz;
           const kxz = this.pxx * ixz + this.pxz * izz;
           const kzx = this.pxz * ixx + this.pzz * ixz;
           const kzz = this.pxz * ixz + this.pzz * izz;
           this.x += kxx * yx + kxz * yz;
           this.z += kzx * yx + kzz * yz;
-          // P = (I − K) P
           const pxx = (1 - kxx) * this.pxx - kxz * this.pxz;
           const pxz = (1 - kxx) * this.pxz - kxz * this.pzz;
           const pzz = -kzx * this.pxz + (1 - kzz) * this.pzz;
@@ -123,7 +249,6 @@ export class ThreatKnowledge {
         }
       }
     }
-    // 같은 방향에서 거듭 들은 소리는 오차가 서로 묶여 있어(딱 소리 혼동·메아리) 무한히 줄지 않는다: 하한
     if (floor > 0) {
       const e = this.err;
       if (e < 2 * floor) {
@@ -133,8 +258,6 @@ export class ThreatKnowledge {
         this.pzz *= k * k;
       }
     }
-    this.lastObs = now;
-    if (this.firstAware < 0) this.firstAware = now;
   }
 
   /** 남에게 들은 위치: 내 것보다 나을 때만 바꾼다(같은 정보를 되받아 오차가 줄어드는 일 없게 — 합치지 않음) */

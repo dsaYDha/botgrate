@@ -269,6 +269,8 @@ export class PlayerHealth {
     if (this.lungTimer >= 0) {
       this.lungTimer -= dt;
       this.lungT = 1 - this.lungTimer / this.lungDur;
+      // 숨이 모자라 심장이 빨리 뛴다
+      p.heart = Math.max(p.heart, MOVEMENT.heart.rest + 80 * this.lungT);
       if (this.lungTimer <= 0) this._die(this.lungRec, '폐 손상으로 쓰러짐');
     }
     if (this.alive && this.blood <= PLAYER_WOUNDS.incapBlood) {

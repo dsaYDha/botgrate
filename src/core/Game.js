@@ -393,8 +393,11 @@ export class Game {
     lines.push(`발사 ${st.shots}발, 적에게 명중 ${st.hits}발${st.shots ? ` (${Math.round((st.hits / st.shots) * 100)} %)` : ''}`);
     lines.push(`무력화한 적 ${c.down}명 / 철수한 적 ${c.withdrawn}명 / 전체 ${c.total}명`);
     const ws = h.wounds.map((w) => `${w.name}${w.tq ? '(지혈대)' : ''}`);
-    lines.push(`플레이어: ${!h.alive ? '사망' : ws.length ? `부상 — ${ws.join(', ')}` : '다치지 않음'}`);
-    document.getElementById('end-title').textContent = !h.alive ? '전사' : '교전 종료';
+    // 즉사가 아니면 '전투 불능'(출혈·폐 손상으로 쓰러짐 — 처치 없이는 살기 어렵지만 그 자리에서 죽은 것은 아니다)
+    const killed = !h.alive && (!h.fatal || h.fatal.cause === '즉사');
+    const down = !h.alive ? (killed ? '사망' : `전투 불능 — ${h.fatal.cause}`) : null;
+    lines.push(`플레이어: ${down || (ws.length ? `부상 — ${ws.join(', ')}` : '다치지 않음')}`);
+    document.getElementById('end-title').textContent = !h.alive ? (killed ? '전사' : '전투 불능') : '교전 종료';
     document.getElementById('end-text').textContent = lines.join('\n');
     this.endscreen.classList.remove('hidden');
   }

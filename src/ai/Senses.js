@@ -193,24 +193,54 @@ export class Senses {
   }
 
   /**
-   * 눈으로 본 위치의 거리 보정: 사람은 '저 숲띠 가장자리'처럼 지형지물에 기대어 위치를 잡는다.
-   * 관측 방위선이 눈대중 거리 ±30 % 안에서 숲띠(수관·덤불 지도)로 들어가면 그 가장자리(+2 m)로, 거리 오차는 6 m로.
-   * @returns {{d:number, sRad:number}|null}
+   * 거리 보정: 사람은 '저 숲띠 가장자리'처럼 지형지물에 기대어 위치를 잡는다.
+   * 관측 방위선이 [lo, hi] × 눈대중 거리 안에서 숲띠 긴 변(수관·덤불 지도)으로 들어가면 그 가장자리(+2 m)까지 거리.
+   * 눈으로 본 것은 ±30 %, 소리(총성)는 거리 감이 나빠 0.4~2.5배 안에서 가장 가까운 가장자리를 고른다.
+   * @returns {{d:number, sRad:number, nx:number, nz:number}|null} 거리, 가장자리 법선(띠 가로 방향)
    */
-  _edgeRange(ex, ez, hx, hz, dEst, span = 0.3) {
-    const nav = this.nav;
-    const c = this.world.canopy;
-    if (!c) return null;
-    const lo = dEst * (1 - span);
-    const hi = dEst * (1 + span);
-    let inside = this._dense(ex + hx * lo, ez + hz * lo);
-    for (let s = lo; s <= hi; s += 2) {
+  _edgeRange(ex, ez, hx, hz, dEst, lo = 0.7, hi = 1.3) {
+    if (!this.world.canopy) return null;
+    // 그 방향으로 [lo, hi] × 눈대중 거리 안의 숲띠 긴 변(트인 땅 → 숲) 중 눈대중에 가장 가까운 것(거리 비 기준).
+    // 띠 끝·틈의 가장자리는 '숲 가장자리'로 쓰지 않는다(긴 변과 직각이라 합치면 엉뚱한 교점이 생김).
+    const s0 = Math.max(4, dEst * lo);
+    const s1 = Math.min(1500, dEst * hi);
+    const layout = this.world.layout;
+    let inside = this._dense(ex + hx * s0, ez + hz * s0);
+    let best = null;
+    let bestK = Infinity;
+    for (let s = s0; s <= s1; s += 2) {
       const now = this._dense(ex + hx * s, ez + hz * s);
-      if (now && !inside) return { d: s + 2, sRad: 6 };
+      if (now && !inside) {
+        const d = s + 2;
+        const k = Math.abs(Math.log(d / dEst));
+        if (k < bestK) {
+          const hit = layout.beltAt(ex + hx * d, ez + hz * d, 8);
+          if (hit) {
+            const b = hit.belt;
+            let end = Math.min(hit.u - b.from, b.to - hit.u);
+            for (const g of b.gaps) end = Math.min(end, Math.abs(hit.u - g[0]), Math.abs(hit.u - g[1]));
+            // 시선이 가장자리를 거의 나란히 스치면(법선과 73° 넘게) 어느 지점인지 가늠할 수 없다
+            if (end > b.half - Math.abs(hit.v) && Math.abs(hx * b.n[0] + hz * b.n[1]) > 0.3) {
+              bestK = k;
+              best = { d, sRad: 6, nx: b.n[0], nz: b.n[1] };
+            }
+          }
+        }
+      }
       inside = now;
     }
-    void nav;
-    return null;
+    return best;
+  }
+
+  /** 합친 추정의 방위를 따라 숲 가장자리를 찾아 그 거리로 맞춤(K.snapRange) */
+  _snapToEdge(K, ox, oz, lo, hi, sr) {
+    if (!K.has) return;
+    const dx = K.x - ox;
+    const dz = K.z - oz;
+    const r = Math.hypot(dx, dz);
+    if (r < 5) return;
+    const edge = this._edgeRange(ox, oz, dx / r, dz / r, r, lo, hi);
+    if (edge) K.snapRange(ox, oz, edge.d, sr, edge.nx, edge.nz);
   }
 
   _dense(x, z) {
@@ -273,25 +303,24 @@ export class Senses {
       a.cracks.delete(shotId);
     }
     bearing += rng.gauss() * sig;
-    let dEst = clamp(d * Math.exp(rng.gauss() * rangeSigma - (rangeSigma * rangeSigma) / 2), 15, 1200);
+    // 거리 눈대중: 로그정규(오차가 거리에 비례), 로그 기준 치우침 없음
+    const dEst = clamp(d * Math.exp(rng.gauss() * rangeSigma), 15, 1200);
     const ux = Math.sin(bearing);
     const uz = -Math.cos(bearing);
     const sLat = Math.max(4, dEst * Math.tan(Math.min(sig, 1.2)));
-    let sRad = Math.max(4, dEst * rangeSigma);
-    // 그 방향의 숲띠 가장자리(눈대중 거리 ±50 % 안)에서 쐈으리라 본다 — 지형지물에 기댄 짐작
-    const edge = this._edgeRange(a.pos.x, a.pos.z, ux, uz, dEst, 0.5);
-    if (edge) {
-      dEst = edge.d;
-      sRad = Math.min(sRad, 15);
-    }
+    const sRad = Math.max(4, dEst * rangeSigma);
     const ox = a.pos.x + ux * dEst;
     const oz = a.pos.z + uz * dEst;
     // 소리만으로는 방위 오차가 약 8°(딱 소리에 헷갈렸으면 12°) 밑으로 줄지 않는다
     const floor = dEst * Math.tan(((crack ? 12 : 8) * Math.PI) / 180);
+    const px = a.pos.x;
+    const pz = a.pos.z;
     this._afterProcess(a, () => {
       K.threat = true;
-      K.observe(ox, oz, sLat, sRad, ux, uz, now, 'bang', floor);
-      a.onObservation?.('bang', { x: ox, z: oz, d: dEst });
+      K.observe(ox, oz, sLat, sRad, ux, uz, now, 'bang', floor, px, pz);
+      // 합친 방위의 숲띠 가장자리(합친 거리의 0.4~2.5배 안)에서 쐈으리라 본다 — 지형지물에 기댄 짐작
+      this._snapToEdge(K, px, pz, 0.4, 2.5, 15);
+      a.onObservation?.('bang', { x: K.x, z: K.z, d: Math.hypot(K.x - px, K.z - pz) });
       this._logKnowledge(a, 'bang');
     });
   }
@@ -363,7 +392,7 @@ export class Senses {
     this._afterProcess(a, () => {
       const K = a.knowledge;
       K.suspicion = Math.min(1, K.suspicion + 0.35);
-      K.observe(ox, oz, Math.max(2, dEst * Math.tan(sigDeg * DEG)), Math.max(2, dEst * rSig), ux, uz, now, source);
+      K.observe(ox, oz, Math.max(2, dEst * Math.tan(sigDeg * DEG)), Math.max(2, dEst * rSig), ux, uz, now, source, 0, a.pos.x, a.pos.z);
       a.onObservation?.(source, { x: ox, z: oz, d: dEst });
       this._logKnowledge(a, source);
     });
@@ -437,18 +466,16 @@ export class Senses {
       const ez = e.z;
       const dh = Math.hypot(cx - ex, cz - ez);
       const re = a.rangeError || 0.15;
-      let dEst = dh * (1 + rng.gauss() * re);
+      const dEst = dh * Math.exp(rng.gauss() * re);
       const sLat = 1 + dh * VISION.sightBearingSigma * 2;
-      let sRad = Math.max(2, dh * re);
-      const edge = this._edgeRange(ex, ez, hx, hz, dEst);
-      if (edge) {
-        dEst = edge.d;
-        sRad = edge.sRad;
-      }
+      const sRad = Math.max(2, dh * re);
+      // 섬광이 숲 속(나무·덤불 사이)이나 숲 바로 앞(3 m 안)에서 보였으면 '저 숲 가장자리'로 거리를 잡는다
+      const inTrees = this._dense(cx, cz) || this._dense(cx + hx * 3, cz + hz * 3);
       this._afterProcess(a, () => {
         K.threat = true;
-        K.observe(ex + hx * dEst, ez + hz * dEst, sLat, sRad, hx, hz, now, 'flash');
-        a.onObservation?.('flash', { x: ex + hx * dEst, z: ez + hz * dEst, d: dEst });
+        K.observe(ex + hx * dEst, ez + hz * dEst, sLat, sRad, hx, hz, now, 'flash', 0, ex, ez, sRad);
+        if (inTrees) this._snapToEdge(K, ex, ez, 0.7, 1.3, 6);
+        a.onObservation?.('flash', { x: K.x, z: K.z, d: dEst });
         this._logKnowledge(a, 'flash');
       });
     }
@@ -531,7 +558,7 @@ export class Senses {
       const ux = (c.x - e.x) / (Math.hypot(c.x - e.x, c.z - e.z) || 1);
       const uz = (c.z - e.z) / (Math.hypot(c.x - e.x, c.z - e.z) || 1);
       K.suspicion = Math.min(1, K.suspicion + 0.5);
-      K.observe(e.x + ux * dEst, e.z + uz * dEst, sLat, Math.max(sLat, r.d * 0.25), ux, uz, now, 'glimpse');
+      K.observe(e.x + ux * dEst, e.z + uz * dEst, sLat, Math.max(sLat, r.d * 0.25), ux, uz, now, 'glimpse', 0, e.x, e.z);
       a.onObservation?.('glimpse', {});
       this._logKnowledge(a, 'glimpse');
     }
@@ -583,20 +610,18 @@ export class Senses {
       K.vz = 0;
     }
     K.prevSeen = { x: seen.x, z: seen.z, t: now };
-    let dEst = hd * K.rangeBias;
-    let sRad = Math.max(1, hd * Math.abs(K.rangeBias - 1) + hd * 0.03);
-    const edge = this._edgeRange(e.x, e.z, vx, vz, dEst);
-    if (edge) {
-      dEst = edge.d;
-      sRad = Math.min(sRad, edge.sRad);
-    }
+    // 거리: 눈대중(이 병사의 치우침 rangeBias). 오차는 자기 눈대중의 보통 오차만큼 — 계속 봐도 같은 쪽으로 틀리므로 줄지 않는다
+    const dEst = hd * K.rangeBias;
+    const sRad = Math.max(1, hd * (a.rangeError || 0.15) + hd * 0.03);
     if (!K.visible) {
       K.visible = true;
       K.visibleSince = now;
     }
     K.threat = true;
     K.suspicion = 1;
-    K.observe(e.x + vx * dEst, e.z + vz * dEst, 0.5 + hd * ang * 2, sRad, vx, vz, now, 'sight');
+    K.observe(e.x + vx * dEst, e.z + vz * dEst, 0.5 + hd * ang * 2, sRad, vx, vz, now, 'sight', 0, e.x, e.z, sRad);
+    // 숲 속(나무·덤불 사이)이나 숲 바로 앞(3 m 안)에 보이면 '저 숲 가장자리'로 거리를 잡는다. 트인 곳에 보이면 그대로(숲띠 앞 얼마인지는 보인다)
+    if (this._dense(px, pz) || this._dense(px + ux * 3, pz + uz * 3)) this._snapToEdge(K, e.x, e.z, 0.7, 1.3, 6);
     if (!continuing) a.onObservation?.('sight', {});
     this._logKnowledge(a, 'sight');
   }
