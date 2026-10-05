@@ -1,10 +1,10 @@
-// F3 디버그 오버레이(현실성 검증용, 평소 숨김): FPS, 위치·속도·자세, 현재 위치 풍속,
+// 디버그 모드(`)에서 F8: 정보 오버레이(현실성 검증용, 평소 숨김): FPS, 위치·속도·자세, 현재 위치 풍속,
 // 조준(흔들림 MOA·탄 분산·총열 온도·거치), 조준점 아래 표적까지 실제 거리와 그 지점 풍속,
 // 총알 궤적 선, 명중 로그(부위, 거리, 착탄 속도, 운동에너지),
 // 적마다 인지 단계·추정 위치 오차(아는 오차 / 실제 오차)·제압·사기·행동, 'AI가 아는 위치 vs 실제' 기록 요약,
 // 3차원: 적이 아는 추정 위치와 오차 원(바닥의 고리).
-// F4: 적 시선(눈 → 내 몸, 초록 = 보임 / 빨강 = 막힘), 가시도 수치, 적 탄 궤적, 소리 사건('딱' 방출점 노랑, 적 총성 주황).
-// F6(F3이 켜져 있을 때): 디버그 전용 무적.
+// F9: 적 시선(눈 → 내 몸, 초록 = 보임 / 빨강 = 막힘), 가시도 수치, 적 탄 궤적, 소리 사건('딱' 방출점 노랑, 적 총성 주황).
+// 적 위치 표시(F2)·적 소환(F3)·더미(F4)·무적(F6)은 DebugTools.
 // 게임 화면에는 거리 정보가 어디에도 없다 — 이 디버그 화면에서만 보인다.
 
 import * as THREE from 'three';
@@ -51,7 +51,7 @@ export class DebugOverlay {
     });
   }
 
-  /** F4: 적 시선·가시도·탄 궤적·소리 사건(3차원 표시) */
+  /** F9: 적 시선·가시도·탄 궤적·소리 사건(3차원 표시) */
   toggleAI() {
     this.aiVisible = !this.aiVisible;
     this.lines.visible = this.visible || this.aiVisible;
@@ -107,7 +107,7 @@ export class DebugOverlay {
     this.el.textContent = lines.join('\n');
   }
 
-  /** 적 인지·전술 상태(F3) */
+  /** 적 인지·전술 상태(F8) */
   _aiLines(g) {
     const em = g.enemies;
     const p = g.player;
@@ -136,7 +136,7 @@ export class DebugOverlay {
     return L;
   }
 
-  /** 3차원 디버그 선: F3 추정 원, F4 시선·소리 사건 */
+  /** 3차원 디버그 선: F8 추정 원, F9 시선·소리 사건 */
   _ai3d(g) {
     const pos = this.segs.geometry.attributes.position.array;
     const col = this.segs.geometry.attributes.color.array;

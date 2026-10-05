@@ -1,6 +1,7 @@
 // 적 부대 만들기·갱신. 시나리오(data/scenario.js)의 부대를 숲띠의 그럴듯한 자리 후보에서 시드로 뽑아 세운다.
 // 인지(Senses)·엄폐 지도·길찾기·부대 지휘·병사 두뇌·소총을 묶고, 탄 판정(적 히트박스)·근탄('딱'·제압)·근처 탄착을 전달한다.
 // 교전 종료: 모든 적이 전투 불능 또는 철수하면 'engagement:end'.
+// 디버그 모드: 조준점에 적 소환(소환조 — 같은 인지·두뇌·소총), 더미(인지·두뇌·총 없이 서 있는 표적, 같은 부상 모델).
 
 import { Enemy } from './Enemy.js';
 import { Brain } from '../ai/Brain.js';
@@ -38,6 +39,7 @@ export class EnemyManager {
     this.bullets = bullets;
     this.enemies = [];
     this.units = [];
+    this.dummies = []; // 디버그 더미: 교전 집계·AI 밖, 탄 판정만
     this.time = 0;
     this.cover = new CoverMap(world);
     this.nav = new NavGrid(world);
@@ -68,6 +70,7 @@ export class EnemyManager {
         if (b && b.shooter === e.id && b.dist < 2.5) continue;
         e.intersect(x0, y0, z0, dx, dy, dz, hits);
       }
+      for (const d of this.dummies) d.intersect(x0, y0, z0, dx, dy, dz, hits);
     });
     bullets.nearMissProvider = (b, x0, y0, z0, dx, dy, dz) => this._nearMiss(b, x0, y0, z0, dx, dy, dz);
     events.on('bullet:impact', (ev) => {
@@ -83,6 +86,7 @@ export class EnemyManager {
       }
     });
     events.on('enemy:hit', (ev) => {
+      if (ev.enemy.dummy) return; // 더미가 맞은 것은 적에게 '동료 피격'이 아니다
       for (const e of this.enemies) {
         if (e === ev.enemy || !e.canPerceive()) continue;
         const d = Math.hypot(e.x - ev.enemy.x, e.z - ev.enemy.z);
@@ -194,8 +198,14 @@ export class EnemyManager {
       if (e.rifle.parent === this.scene) this.scene.remove(e.rifle);
       this.senses.unregister(e);
     }
+    for (const d of this.dummies) {
+      this.scene.remove(d.group);
+      if (d.rifle.parent === this.scene) this.scene.remove(d.rifle);
+    }
     this.enemies.length = 0;
     this.units.length = 0;
+    this.dummies.length = 0;
+    this._dbgUnit = null;
     this.cover.releaseAllOccupants?.();
     for (const p of this.cover.points) p.occ = null;
     this.nav.queue.length = 0;
@@ -206,6 +216,34 @@ export class EnemyManager {
     this.ended = false;
     this.seed = (this.seed * 1103515245 + 12345) % 1e9;
     this._spawnAll();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 디버그: 소환
+  /** 적 한 명 소환(조준점). 소환조(부대)에 들어가 다른 적과 같은 인지·두뇌·소총으로 움직인다 — 처음엔 플레이어를 모른다. */
+  spawnDebugEnemy(x, z, look) {
+    if (!this._dbgUnit) {
+      const def = { id: 'DBG', name: '소환조', kind: 'team', teams: [{ id: 'D', name: '소환조', size: 0 }], leader: false, withdrawBelt: 'N', radio: [] };
+      this._dbgUnit = new Unit(def, this.ctx);
+      this._dbgUnit.peers = [];
+      this.units.push(this._dbgUnit);
+    }
+    const u = this._dbgUnit;
+    const n = u.members.length + 1;
+    const e = this._spawn({ id: `DBG-D${n}`, pos: [x, z], role: 'guard', look, stance: 'kneel', speed: 1.1 }, rng);
+    u.add(e, 'D', n === 1 ? 'teamLeader' : 'rifleman');
+    // 교전이 끝났다고 판정된 뒤라도 새 적이 있으면 다시 센다
+    this.ended = false;
+    return e;
+  }
+
+  /** 더미 생성(조준점): 서 있는 표적. 보지도 쏘지도 움직이지도 않고, 맞으면 적과 같은 부상 모델로 쓰러진다. */
+  spawnDummy(x, z, look) {
+    const n = this.dummies.length + 1;
+    const d = new Enemy({ id: `더미${n}`, pos: [x, z], role: 'guard', look, stance: 'stand' }, this.ctx);
+    d.dummy = true;
+    this.dummies.push(d);
+    return d;
   }
 
   _others(self) {
@@ -293,6 +331,7 @@ export class EnemyManager {
       const wound = e.state === 'down' ? 2.3 : e.clutch === 'arm' ? 3 : e.clutch === 'chest' ? 2 : 1;
       sh.update(dt, { stance: st, speed: e.speed, supp: Math.min(1, e.supp), rest: rested, wound });
     }
+    for (const d of this.dummies) d.update(dt);
     this._checkEnd();
   }
 

@@ -30,6 +30,7 @@ import { PlayerBody } from '../player/PlayerBody.js';
 import { PlayerHealth } from '../player/PlayerHealth.js';
 import { Effects } from '../effects/Effects.js';
 import { AudioEngine } from '../audio/AudioEngine.js';
+import { DebugTools } from '../ui/DebugTools.js';
 
 // 노출(AgX 톤매핑 전 곱). 하늘 모델의 렌더 단위에 맞춘 값
 const EXPOSURE = 1.05;
@@ -125,7 +126,8 @@ export class Game {
     this.enemies = new EnemyManager(this.scene, this.world, this.events, this.bullets, { player: this.player, body: this.playerBody, weapon: this.weapon });
     this.bullets.listener = () => this.eyePos;
     this.bullets.addTargetProvider((x0, y0, z0, dx, dy, dz, hits, b) => {
-      if (b && b.shooter === 'player') return;
+      // 자기 탄과 디버그 광선 탐사(b 없음 — 눈에서 나가는 광선)는 내 몸에 맞지 않는다
+      if (!b || b.shooter === 'player') return;
       this.playerBody.intersect(x0, y0, z0, dx, dy, dz, hits, this.playerTarget);
     });
     this.playerTarget = {
@@ -139,6 +141,7 @@ export class Game {
     this._trackStats();
     this.events.on('player:cannotStand', () => this.toast.show('다쳐서 일어설 수 없다 — 엎드려 기고 쏠 수만 있다'));
     this.debug = new DebugOverlay(document.getElementById('debug'), this.scene, this.events);
+    this.debugTools = new DebugTools(this);
 
     // 바람
     this._applyWind(true);
@@ -219,6 +222,7 @@ export class Game {
       this.last = t;
       if (!this.paused) this.update(dt);
       else this.updatePaused();
+      this.debugTools.update();
       this.render();
       this.debug.update(dt, this);
     };
@@ -243,14 +247,9 @@ export class Game {
     this.world.syncWind(this.time);
     const inp = this.input;
     const [mdx, mdy] = inp.consumeMouse();
-    if (inp.wasPressed(KEYS.debug)) this.debug.toggle();
-    if (inp.wasPressed(KEYS.debugAI)) this.debug.toggleAI();
+    this.debugTools.handleInput(inp);
     if (inp.wasPressed(KEYS.reset)) this.reset();
     if (inp.wasPressed(KEYS.tourniquet)) this.health.toggleTourniquet();
-    if (inp.wasPressed(KEYS.god) && this.debug.visible) {
-      this.health.godMode = !this.health.godMode;
-      this.toast.show(`디버그 무적: ${this.health.godMode ? '켜짐' : '꺼짐'}`);
-    }
 
     // 플레이어·무기
     this.player.update(dt, { ads: this.weapon.ads, adsHeld: this.weapon.adsWanted, lookDX: mdx, lookDY: mdy, zoom: this.zoom });

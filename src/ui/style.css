@@ -250,3 +250,20 @@ button.primary {
 button.primary:hover {
   background: #7d7b48;
 }
+
+/* 디버그 모드 F2: 적 이름표 */
+#debug-labels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+.dbg-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font: 11px/1.2 ui-monospace, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  text-shadow: 0 0 2px #000, 0 0 2px #000;
+}

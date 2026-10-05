@@ -296,7 +296,7 @@ export class BulletSystem {
   }
 
   /**
-   * 디버그(F3): 광선이 처음 닿는 고체(지면·줄기·가지·통나무·짚 더미·뿌리판·적). 잎·풀 볼륨은 지나친다.
+   * 디버그(F8 정보 화면, 디버그 모드의 소환 위치): 광선이 처음 닿는 고체(지면·줄기·가지·통나무·짚 더미·뿌리판·적). 잎·풀 볼륨은 지나친다.
    * @returns {{dist:number, kind:string, part?:string, x:number, y:number, z:number}|null}
    */
   rayProbe(ox, oy, oz, dx, dy, dz, maxDist = 1500) {

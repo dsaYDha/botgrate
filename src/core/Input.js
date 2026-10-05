@@ -16,10 +16,17 @@ export const KEYS = {
   switchSight: 'KeyV',
   reset: 'KeyP',
   tourniquet: 'KeyH',
-  debug: 'F3',
-  debugAI: 'F4',
-  god: 'F6', // 디버그 전용 무적(F3 화면이 켜져 있을 때만)
+  // 디버그 모드(` 키로 켜고 끔). 아래 키들은 디버그 모드에서만 동작한다.
+  debugMode: 'Backquote',
+  debugMarkers: 'F2', // 적 위치 표시(가려져도 보임)
+  spawnEnemy: 'F3', // 조준점에 적 소환
+  spawnDummy: 'F4', // 조준점에 더미(움직이지 않는 표적) 생성
+  god: 'F6', // 무적
+  debug: 'F8', // 정보 오버레이
+  debugAI: 'F9', // AI 시선·소리 사건
 };
+
+const DEBUG_KEYS = new Set(['F2', 'F3', 'F4', 'F6', 'F8', 'F9']);
 
 export class Input {
   constructor(element) {
@@ -39,7 +46,7 @@ export class Input {
     if (this.forceLocked) this.locked = true;
     this.onLockChange = null;
     this._onKeyDown = (e) => {
-      if (e.code === 'F3' || e.code === 'F4' || e.code === 'F6' || e.code === 'Tab' || (this.locked && e.code === 'Space')) e.preventDefault();
+      if (DEBUG_KEYS.has(e.code) || e.code === 'Tab' || (this.locked && e.code === 'Space')) e.preventDefault();
       if (e.repeat) return;
       if (this.fallback && this.locked && e.code === 'Escape') {
         this._setFallbackLock(false);
