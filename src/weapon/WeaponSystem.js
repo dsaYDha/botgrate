@@ -437,7 +437,7 @@ export class WeaponSystem {
     const dir = this.boreDir.set(Math.sin(dy) * Math.cos(dp + aj), Math.sin(dp + aj), -Math.cos(dp + aj) * Math.cos(dy)).normalize();
     dir.applyQuaternion(this.qW);
     const v0 = this.data.muzzleVelocity + rng.gauss() * this.ammo.muzzleVelocitySD;
-    this.bullets.fire({
+    const bullet = this.bullets.fire({
       origin: muzzle,
       dir,
       speed: v0,
@@ -452,6 +452,7 @@ export class WeaponSystem {
     const ejectLocal = this.data.geometry.ejectionPort;
     this.events.emit('shot', {
       shooter: 'player',
+      bulletId: bullet.id,
       position: muzzle.clone(),
       direction: dir.clone(),
       weapon: this.data.id,

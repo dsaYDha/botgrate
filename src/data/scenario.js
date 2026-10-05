@@ -1,36 +1,47 @@
-// 1단계 테스트 시나리오. 플레이어는 남쪽 숲띠 북쪽 가장자리(418, 248.5)에서 북쪽을 본다.
-// behavior: guard(경계, look: 바라보는 방위° 범위), patrol(waypoints 순회), cross(들판 횡단)
-// pose: stand | kneel
+// 2단계 시나리오: 플레이어는 남쪽 숲띠 북쪽 가장자리(418, 248.5)에서 북쪽을 본다.
+// 적: 북쪽 맞은편 숲띠(가운데 숲띠 M, 300~400 m)에 1개 분대(분대장 + 4명 사격조 2개 = 9명),
+//     동쪽 연결 숲띠(E, 50~200 m)에 사격조 1개(4명). 처음에는 아군이 있는 줄 모르고 경계·순찰·휴식 중.
+// 시작 위치는 '그럴듯한 자리 후보'(숲 가장자리 경계 자리, 숲 안 휴식 자리, 순찰 구간) 중에서 시드로 뽑는다(매번 다름).
+//
+// belt: 숲띠 id, u: 띠 축 방향 범위, side: 플레이어 쪽 가장자리, withdraw: 사기가 꺾이면 물러날 방향의 숲띠
 
 export const SCENARIO = {
-  enemies: [
-    // --- 맞은편(가운데) 숲띠: 300~400 m ---
-    { id: 'm1', behavior: 'guard', pos: [262, -87.5], look: [150, 210], pose: 'stand' },
-    { id: 'm2', behavior: 'guard', pos: [331, -90.5], look: [160, 200], pose: 'kneel' }, // 흙둔덕 뒤
-    { id: 'm3', behavior: 'guard', pos: [398, -88.0], look: [170, 230], pose: 'stand' },
-    { id: 'm4', behavior: 'guard', pos: [446, -87.0], look: [140, 200], pose: 'kneel' },
-    { id: 'm5', behavior: 'patrol', waypoints: [[245, -96], [330, -97], [420, -95], [455, -96]], speed: 1.1 },
-    { id: 'm6', behavior: 'patrol', waypoints: [[440, -100], [360, -99], [290, -101]], speed: 1.0 },
-    { id: 'm7', behavior: 'patrol', waypoints: [[300, -91], [370, -92]], speed: 0.9 },
-    { id: 'm8', behavior: 'guard', pos: [355, -94], look: [120, 240], pose: 'stand' },
-    // --- 동쪽 연결 숲띠 안: 50~150 m ---
-    { id: 'e1', behavior: 'patrol', waypoints: [[478, 228], [482, 175], [476, 130], [481, 175]], speed: 1.0 },
-    { id: 'e2', behavior: 'patrol', waypoints: [[485, 140], [474, 200], [486, 232]], speed: 1.1 },
-    { id: 'e3', behavior: 'guard', pos: [471.5, 196], look: [200, 280], pose: 'kneel' },
-    { id: 'e4', behavior: 'guard', pos: [472.0, 158], look: [230, 300], pose: 'stand' },
-    { id: 'e5', behavior: 'patrol', waypoints: [[479, 182], [487, 122], [481, 155]], speed: 0.9 },
-    // --- 들판 횡단 ---
-    { id: 'c1', behavior: 'cross', waypoints: [[466, 30], [330, 34], [190, 40], [150, 60]], speed: 1.45 },
+  units: [
+    {
+      id: 'S1',
+      name: '1분대',
+      kind: 'squad',
+      belt: 'M',
+      u: [262, 455], // 플레이어 정면 ±100 m 남짓
+      side: 'south',
+      teams: [
+        { id: 'A', name: '1사격조', size: 4 },
+        { id: 'B', name: '2사격조', size: 4 },
+      ],
+      leader: true,
+      withdrawBelt: 'N',
+      radio: ['T3'],
+    },
+    {
+      id: 'T3',
+      name: '3사격조',
+      kind: 'team',
+      belt: 'E',
+      u: [110, 228],
+      side: 'west',
+      teams: [{ id: 'C', name: '3사격조', size: 4 }],
+      leader: false,
+      withdrawBelt: 'M',
+      radio: ['S1'],
+    },
   ],
-  // 가끔 새로 들판을 가로지르는 적(동시 최대 2명)
-  crossers: {
-    interval: [70, 140],
-    maxConcurrent: 2,
-    routes: [
-      [[466, 40], [320, 45], [170, 52]],
-      [[300, -82], [312, 30], [330, 120], [356, 200]],
-      [[160, -80], [240, 20], [380, 70], [466, 90]],
-      [[466, 120], [380, 115], [240, 95], [120, 80]],
-    ],
+  // 병사 숙련도 범위(요청서): 흔들림 배율, 반응 시간 배율, 거리 눈대중 오차
+  skill: {
+    sway: [0.8, 1.5],
+    reaction: [0.8, 1.3],
+    rangeError: [0.1, 0.2],
+    vision: [0.85, 1.15],
   },
+  // 시작 행동 비율(숲 가장자리 경계 / 숲 안 순찰 / 숲 안 휴식)
+  startRoles: { guard: 0.45, patrol: 0.25, rest: 0.3 },
 };

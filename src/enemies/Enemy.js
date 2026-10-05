@@ -18,7 +18,7 @@ function lieQuat(up, front) {
   const x = new THREE.Vector3().crossVectors(y, z);
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
 }
-const LIE = {
+export const LIE = {
   front: lieQuat([0, 0, 1], [0, -1, 0]),
   back: lieQuat([0, 0, -1], [0, 1, 0]),
   left: lieQuat([1, 0, 0], [0, 0, 1]),
@@ -26,13 +26,17 @@ const LIE = {
 };
 
 // 들고 있는 소총의 가슴뼈 기준 위치(손잡이)·자세
-const CARRY = {
+export const CARRY = {
   low: { pos: [-0.12, -0.12, 0.22], rot: [0.5, 0.28, 0.0] },
   ready: { pos: [-0.1, 0.02, 0.24], rot: [0.12, 0.1, 0.0] },
+  // 견착 조준: 개머리판이 오른 어깨, 총열이 눈높이 조금 아래
+  aim: { pos: [-0.11, 0.22, 0.3], rot: [0.0, 0.04, 0.0] },
   prone: { pos: [-0.05, 0.42, 0.1], rot: [-1.45, 0.0, 0.0] },
 };
+const MUZZLE_LOCAL = [0, 0.045, 0.64]; // 적 총 모델 좌표의 총구(weapons.js rifle762.modelMuzzle)
+const EYE_LOCAL = [0, 0.1, 0.085]; // 머리뼈 기준 눈
 
-function solveArm(shoulder, target, side) {
+export function solveArm(shoulder, target, side) {
   const a = 0.3;
   const b = 0.27;
   const D = target.clone().sub(shoulder);
@@ -88,6 +92,8 @@ export class Enemy {
     this.tmpE = new THREE.Euler();
     this.flinch = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
     this._hb = { t0: 0, t1: 0 };
+    this.pos = { x: 0, z: 0 };
+    this._v3 = new THREE.Vector3();
     this.reset();
   }
 
@@ -97,13 +103,13 @@ export class Enemy {
     this.x = p[0];
     this.z = p[1];
     this.y = this.ctx.world.terrain.heightAt(this.x, this.z);
-    this.heading = d.look ? (((d.look[0] + d.look[1]) / 2) * Math.PI) / 180 : 0;
+    this.heading = typeof d.look === 'number' ? d.look : d.look ? (((d.look[0] + d.look[1]) / 2) * Math.PI) / 180 : 0;
     if (d.waypoints && d.waypoints.length > 1) this.heading = Math.atan2(d.waypoints[1][0] - p[0], -(d.waypoints[1][1] - p[1]));
     this.speed = 0;
     this.moveTarget = null;
     this.moveSpeed = 0;
-    this.stance = d.pose === 'kneel' ? 'kneel' : 'stand';
-    this.stanceBlend = { stand: this.stance === 'stand' ? 1 : 0, kneel: this.stance === 'kneel' ? 1 : 0, prone: 0, sit: 0 };
+    this.stance = d.stance || (d.pose === 'kneel' ? 'kneel' : 'stand');
+    this.stanceBlend = { stand: this.stance === 'stand' ? 1 : 0, kneel: this.stance === 'kneel' ? 1 : 0, prone: this.stance === 'prone' ? 1 : 0, sit: 0 };
     this.gait = 0;
     this.lookYaw = 0;
     this.lookPitch = 0;
@@ -130,6 +136,14 @@ export class Enemy {
     this.group.visible = true;
     this.lastHitTime = -100;
     this.hitCount = 0;
+    this.dead = false; // 즉사(머리·목·흉부 중앙·척추)
+    this.dragBy = null;
+    this.dragged = false;
+    this.supp = 0; // 제압 수치(0~1+)
+    this.withdrawn = false;
+    this.aimAt = null; // 조준점(두뇌가 지정)
+    this.pos.x = this.x;
+    this.pos.z = this.z;
     this._applyCarry(true);
     this._pose(0.016, true);
   }
@@ -152,6 +166,52 @@ export class Enemy {
     const c = CARRY[this.carry] || CARRY.low;
     this.rifle.position.set(...c.pos);
     this.rifle.quaternion.setFromEuler(new THREE.Euler(c.rot[0], c.rot[1], c.rot[2], 'YXZ'));
+  }
+
+  // ---- 인지 시스템(Senses)용: 눈·시선(머리뼈), 지각 가능 여부 ----
+  eye(out) {
+    const v = this._v3.set(EYE_LOCAL[0], EYE_LOCAL[1], EYE_LOCAL[2]).applyMatrix4(this.bones.head.matrixWorld);
+    out.x = v.x;
+    out.y = v.y;
+    out.z = v.z;
+    return out;
+  }
+  gaze(out) {
+    const m = this.bones.head.matrixWorld.elements;
+    // 머리뼈 국소 +z(정면)
+    const l = Math.hypot(m[8], m[9], m[10]) || 1;
+    out.x = m[8] / l;
+    out.y = m[9] / l;
+    out.z = m[10] / l;
+    return out;
+  }
+  canPerceive() {
+    if (this.dead || this.withdrawn) return false;
+    if (this.state === 'normal' || this.state === 'collapsing') return true;
+    return this.state === 'down' && !this.incapacitated;
+  }
+  inShade() {
+    return this.ctx.world.belts.canopyAt(this.x, this.z) > 0.35;
+  }
+  onObservation(kind, data) {
+    this.brain?.onObservation(kind, data);
+  }
+  get rangeError() {
+    return this.skill ? this.skill.rangeError : 0.15;
+  }
+  get visionScale() {
+    // 휴식 중이면 덜 살핀다, 시력 숙련도
+    const rest = this.brain && this.brain.task.type === 'peace' && this.def.role === 'rest' ? 1.6 : 1;
+    return (this.skill ? 1 / this.skill.vision : 1) * rest;
+  }
+  /** 총구 월드 좌표 */
+  muzzleWorld(out) {
+    this.rifle.updateMatrixWorld(true);
+    const v = this._v3.set(MUZZLE_LOCAL[0], MUZZLE_LOCAL[1], MUZZLE_LOCAL[2]).applyMatrix4(this.rifle.matrixWorld);
+    out.x = v.x;
+    out.y = v.y;
+    out.z = v.z;
+    return out;
   }
 
   get chestWorld() {
@@ -198,6 +258,7 @@ export class Enemy {
     if (this.state === 'collapsing' || this.state === 'down') return;
     // 두 번째 이상 피격, 또는 치명 부위 → 즉시 무력화
     const severe = w.kind === 'incap' || (this.wounds.length >= 2 && w.kind !== 'arm') || this.wounds.length >= 3;
+    if (w.kind === 'incap') this.dead = true;
     if (severe) this.startCollapse(info, 'incap');
     else if (w.kind === 'leg') this.startCollapse(info, 'leg');
     else if (w.kind === 'abdomen') this.startCollapse(info, 'sit');
@@ -289,6 +350,21 @@ export class Enemy {
     if (this.state === 'normal') this._locomotion(dt);
     else if (this.state === 'collapsing') this._collapseUpdate(dt);
     else if (this.state === 'down') this._downUpdate(dt);
+    // 동료가 끌고 감: 구조자 뒤 0.9 m
+    if (this.dragBy && this.state === 'down') {
+      const r = this.dragBy;
+      const dx = this.x - r.x;
+      const dz = this.z - r.z;
+      const l = Math.hypot(dx, dz) || 1;
+      this.x = r.x + (dx / l) * 0.9;
+      this.z = r.z + (dz / l) * 0.9;
+      this.y = this.ctx.world.terrain.heightAt(this.x, this.z);
+      this.heading = Math.atan2(r.x - this.x, -(r.z - this.z));
+    }
+    this.pos.x = this.x;
+    this.pos.z = this.z;
+    // 제압 수치는 사격이 멎으면 서서히 줄어든다(시정수 약 6 s)
+    this.supp *= Math.exp(-dt / 6);
     this._pose(dt, false);
   }
 
@@ -299,16 +375,19 @@ export class Enemy {
       const dx = this.moveTarget[0] - this.x;
       const dz = this.moveTarget[1] - this.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < 0.25) {
+      // 도착 반경: 엎드려 기면 몸 길이만큼 여유
+      if (dist < (this.stance === 'prone' ? 0.55 : 0.3)) {
         this.moveTarget = null;
       } else {
         let want = Math.atan2(dx, -dz);
         // 줄기 피하기
         want += this._avoid(want);
         const turn = wrapAngle(want - this.heading);
-        const rate = this.stance === 'prone' ? 1.2 : 3.5;
+        const rate = this.stance === 'prone' ? 2.0 : 3.5;
         this.heading += clamp(turn, -rate * dt, rate * dt);
-        targetSpeed = this.moveSpeed * (Math.abs(turn) > 1.2 ? 0.3 : 1);
+        // 크게 돌아야 하면 제자리에서 돌고(맴돌지 않게), 다가가면 속도를 줄인다
+        targetSpeed = Math.abs(turn) > 1.0 ? 0 : this.moveSpeed * (Math.abs(turn) > 0.5 ? 0.5 : 1);
+        targetSpeed = Math.min(targetSpeed, 0.4 + dist * 1.6);
         if (this.clutch === 'chest') targetSpeed *= 0.45;
         if (this.clutch === 'arm') targetSpeed *= 0.8;
       }
@@ -450,7 +529,18 @@ export class Enemy {
     const set = (n, x, y = 0, z = 0) => (E[n] = [x, y, z]);
     const mv = clamp(this.speed / 1.5, 0, 1.6);
     const ph = this.gait;
-    let armsMode = this.rifleHeld ? this.carry : 'free';
+    const aiming = this.aimAt && this.shooter && this.shooter.raise > 0.25;
+    let armsMode = this.rifleHeld ? (aiming ? 'aim' : this.brain && this.brain.task.type !== 'peace' ? 'ready' : 'low') : 'free';
+    // 조준: 몸을 조준점 쪽으로, 가슴을 앙각만큼
+    let aimPitch = 0;
+    if (aiming && this.state === 'normal') {
+      const a = this.aimAt;
+      const want = Math.atan2(a.x - this.x, -(a.z - this.z));
+      if (!this.moveTarget) this.heading += clamp(wrapAngle(want - this.heading), -4 * dt, 4 * dt);
+      const sh = this.y + (this.stance === 'prone' ? 0.3 : this.stance === 'kneel' ? 1.05 : 1.45);
+      aimPitch = Math.atan2(a.y - sh, Math.hypot(a.x - this.x, a.z - this.z));
+      this.lookYaw = damp(this.lookYaw, 0, 8, dt);
+    }
 
     if (this.state === 'normal') {
       // 목표 자세 혼합
@@ -467,7 +557,7 @@ export class Enemy {
       pelvisH -= crouch * 0.22;
       set('pelvis', 0, Math.sin(ph) * 0.06 * mv, 0);
       set('spine', 0.05 + 0.06 * mv + kneel * 0.1 + crouch * 0.35, -Math.sin(ph) * 0.05 * mv, 0);
-      set('chest', 0.04 + (this.clutch ? 0.25 : 0), 0, 0);
+      set('chest', 0.04 + (this.clutch ? 0.25 : 0) - aimPitch * (1 - sb.prone), 0, 0);
       const legL = Math.sin(ph) * swing;
       const legR = Math.sin(ph + Math.PI) * swing;
       set('thighL', lerp(-legL - crouch * 0.6, -1.45, kneel), 0, 0.03);
@@ -492,8 +582,8 @@ export class Enemy {
         E.footR[0] += 1.2 * prone;
         armsMode = this.rifleHeld ? 'prone' : 'free';
       }
-      // 머리: 시선
-      set('neck', -0.05 - prone * 0.95 + this.lookPitch * 0.4, this.lookYaw * 0.45, 0);
+      // 머리: 시선(엎드려 조준하면 고개를 앙각만큼 더 든다)
+      set('neck', -0.05 - prone * 0.95 + this.lookPitch * 0.4 - aimPitch * prone * 0.8, this.lookYaw * 0.45, 0);
       set('head', this.lookPitch * 0.6, this.lookYaw * 0.55, 0);
     } else {
       // 쓰러짐/누움
@@ -598,8 +688,8 @@ export class Enemy {
   _poseArms(mode, rate, snap) {
     const B = this.bones;
     let qs;
-    if (mode === 'low' || mode === 'ready' || mode === 'prone') {
-      if (this.carry !== mode && (mode === 'prone' || this.carry === 'prone')) {
+    if (mode === 'low' || mode === 'ready' || mode === 'prone' || mode === 'aim') {
+      if (this.carry !== mode) {
         this.carry = mode;
         this._applyCarry();
       }

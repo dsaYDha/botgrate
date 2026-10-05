@@ -1,202 +1,330 @@
-// 적 생성·갱신, 시나리오 초기화(P), 탄 충돌 공급자, 근탄·근처 탄착·동료 피격 → 제압 반응 전달,
-// 들판 횡단자 주기 생성, 엄폐물·경계 자리 찾기(적끼리 간격 유지).
-// 근탄: 초음속 탄이 4 m 안을 지나면 반드시, 4~12 m는 거리에 따라 확률로 '딱' 소리에 반응한다.
+// 적 부대 만들기·갱신. 시나리오(data/scenario.js)의 부대를 숲띠의 그럴듯한 자리 후보에서 시드로 뽑아 세운다.
+// 인지(Senses)·엄폐 지도·길찾기·부대 지휘·병사 두뇌·소총을 묶고, 탄 판정(적 히트박스)·근탄('딱'·제압)·근처 탄착을 전달한다.
+// 교전 종료: 모든 적이 전투 불능 또는 철수하면 'engagement:end'.
 
 import { Enemy } from './Enemy.js';
 import { Brain } from '../ai/Brain.js';
+import { Shooter } from '../ai/Shooter.js';
+import { Unit } from '../ai/Squad.js';
+import { ThreatKnowledge } from '../ai/Knowledge.js';
+import { Senses } from '../ai/Senses.js';
+import { CoverMap } from '../ai/CoverMap.js';
+import { NavGrid } from '../ai/NavGrid.js';
 import { SCENARIO } from '../data/scenario.js';
-import { WORLD } from '../data/world.js';
-import { rng } from '../core/Random.js';
+import { Random, rng } from '../core/Random.js';
 import { pointSegDistance } from '../physics/intersect.js';
+import { flybyGeometry, isSupersonic } from '../physics/BulletSystem.js';
+
+export const SUPPRESSION = {
+  // 근탄: 가까이 스칠수록 크게(초음속 '딱'), 근처 탄착
+  nearMiss: [
+    [1.0, 0.5],
+    [3.0, 0.28],
+    [8.0, 0.07],
+  ],
+  impact: { range: 2.5, amount: 0.35 },
+  max: 1.6,
+};
 
 export class EnemyManager {
-  constructor(scene, world, events, bullets) {
+  /**
+   * @param {object} truth {player, body, weapon} — 인지 시스템에만 넘긴다
+   */
+  constructor(scene, world, events, bullets, truth) {
     this.scene = scene;
     this.world = world;
     this.events = events;
+    this.bullets = bullets;
     this.enemies = [];
-    this.ctx = { world, events, scene, enemies: this.enemies };
-    for (const def of SCENARIO.enemies) this._spawn(structuredClone(def));
-    this.crossTimer = rng.range(SCENARIO.crossers.interval[0], SCENARIO.crossers.interval[1]);
-    this.crosserCount = 0;
-
-    bullets.addTargetProvider((x0, y0, z0, dx, dy, dz, hits) => {
-      for (const e of this.enemies) e.intersect(x0, y0, z0, dx, dy, dz, hits);
-    });
-    // 근탄: 초음속 탄 선분이 가슴에서 4 m 안을 지나면 반드시, 4~12 m는 거리에 따라 확률로 반응('딱' 소리).
-    // 탄이 지나간 그 순간에 알게 된다(탄보다 먼저 반응할 수 없음). 아음속으로 느려진 탄은 '딱' 소리가 없다.
-    bullets.nearMissProvider = (b, x0, y0, z0, dx, dy, dz) => {
-      const sp = Math.hypot(b.vx, b.vy, b.vz) || 1;
-      if (sp < 345) return;
-      for (const e of this.enemies) {
-        if (e.state !== 'normal' || b.notified.includes(e.id)) continue;
-        if (Math.abs(e.x - x0) > 50 || Math.abs(e.z - z0) > 50) continue;
-        const c = e.chestWorld;
-        const r = pointSegDistance(c.x, c.y, c.z, x0, y0, z0, dx, dy, dz);
-        if (r.d < 12 && r.t > 0 && r.t < 1) {
-          b.notified.push(e.id);
-          const p = r.d < 4 ? 1 : 0.85 * (1 - (r.d - 4) / 8);
-          if (rng.next() < p) e.brain.onSuppress({ type: 'nearMiss', distance: r.d, dir: { x: b.vx / sp, y: b.vy / sp, z: b.vz / sp } });
-        }
-      }
+    this.units = [];
+    this.time = 0;
+    this.cover = new CoverMap(world);
+    this.nav = new NavGrid(world);
+    this.senses = new Senses(world, events, truth);
+    console.info(`[ai] cover points ${this.cover.points.length} (${this.cover.buildMs.toFixed(0)} ms), nav ${this.nav.N}² (${this.nav.buildMs.toFixed(0)} ms)`);
+    this.ctx = {
+      world,
+      events,
+      scene,
+      enemies: this.enemies,
+      cover: this.cover,
+      nav: this.nav,
+      sight: this.senses.sight,
+      time: () => this.time,
+      others: (e) => this._others(e),
+      muzzleClear: (e, p) => this._muzzleClear(e, p),
     };
-    events.on('bullet:impact', (ev) => {
+    const qs = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+    this.seed = Number(qs.get('seed')) || Date.now() % 1e9;
+    // ?seed=… 이면 실행 중 난수도 고정(같은 상황 재현용)
+    if (qs.get('seed')) rng.s = this.seed >>> 0;
+    this._spawnAll();
+
+    bullets.addTargetProvider((x0, y0, z0, dx, dy, dz, hits, b) => {
       for (const e of this.enemies) {
-        if (e.state !== 'normal') continue;
-        if (ev.kind === 'body' && ev.target === e) continue;
+        // 쏜 사람 자기 몸은 총구에서 2.5 m까지 빼고
+        if (b && b.shooter === e.id && b.dist < 2.5) continue;
+        e.intersect(x0, y0, z0, dx, dy, dz, hits);
+      }
+    });
+    bullets.nearMissProvider = (b, x0, y0, z0, dx, dy, dz) => this._nearMiss(b, x0, y0, z0, dx, dy, dz);
+    events.on('bullet:impact', (ev) => {
+      if (ev.kind === 'body' && ev.target) ev.target.lastHitDir = ev.dir;
+      if (ev.shooter !== 'player') return;
+      for (const e of this.enemies) {
+        if (!e.canPerceive() || (ev.kind === 'body' && ev.target === e)) continue;
         const d = Math.hypot(e.x - ev.x, e.z - ev.z);
-        if (d < 3.0) e.brain.onSuppress({ type: 'impact', distance: d, dir: ev.dir });
+        if (d < SUPPRESSION.impact.range) {
+          e.supp = Math.min(SUPPRESSION.max, e.supp + SUPPRESSION.impact.amount * (1 - d / SUPPRESSION.impact.range) + 0.1);
+          e.brain.onSuppress({ type: 'impact', distance: d, dir: ev.dir });
+        }
       }
     });
     events.on('enemy:hit', (ev) => {
       for (const e of this.enemies) {
-        if (e === ev.enemy || e.state !== 'normal') continue;
+        if (e === ev.enemy || !e.canPerceive()) continue;
         const d = Math.hypot(e.x - ev.enemy.x, e.z - ev.enemy.z);
-        if (d < 22) e.brain.onSuppress({ type: 'allyHit', distance: d, dir: ev.enemy.lastHitDir || null });
+        if (d < 25) {
+          e.supp = Math.min(SUPPRESSION.max, e.supp + 0.25 * (1 - d / 25));
+          e.brain.onSuppress({ type: 'allyHit', distance: d, dir: ev.enemy.lastHitDir || null });
+        }
       }
     });
-    events.on('bullet:impact', (ev) => {
-      if (ev.kind === 'body' && ev.target) ev.target.lastHitDir = ev.dir;
+    events.on('enemy:down', (ev) => {
+      const e = ev.enemy;
+      if (e._casualty) return;
+      e._casualty = true;
+      e.unit?.onCasualty(e);
     });
   }
 
-  _spawn(def) {
+  // ---------------------------------------------------------------------------
+  _spawnAll() {
+    const R = new Random(this.seed >>> 0);
+    this.rand = R;
+    const layout = this.world.layout;
+    for (const def of SCENARIO.units) {
+      const unit = new Unit(def, this.ctx);
+      this.units.push(unit);
+      const belt = layout.beltById[def.belt];
+      const sign = belt.sideSign(def.side);
+      const size = def.teams.reduce((a, t) => a + t.size, 0) + (def.leader ? 1 : 0);
+      const spread = def.kind === 'squad' ? 45 : 28;
+      const u0 = R.range(def.u[0] + spread * 0.6, def.u[1] - spread * 0.6);
+      // 바깥(플레이어 쪽) 방위
+      const outN = { x: belt.n[0] * sign, z: belt.n[1] * sign };
+      const look = Math.atan2(outN.x, -outN.z);
+      const placed = [];
+      const pickRole = (k) => {
+        if (k < 2) return 'guard';
+        return R.weighted(SCENARIO.startRoles);
+      };
+      let k = 0;
+      const mk = (teamId, role, idx) => {
+        const r = pickRole(k++);
+        let pos = null;
+        for (let tries = 0; tries < 40 && !pos; tries++) {
+          const u = u0 + R.range(-spread, spread) + (teamId === 'A' ? -spread * 0.3 : teamId === 'B' ? spread * 0.3 : 0);
+          const v = r === 'guard' ? sign * (belt.half - R.range(0.3, 1.8)) : sign * R.range(-belt.half * 0.5, belt.half * 0.6);
+          const p = belt.toWorld(u, v);
+          if (placed.every((q) => Math.hypot(q[0] - p.x, q[1] - p.z) > 5)) pos = [p.x, p.z];
+        }
+        if (!pos) {
+          const p = belt.toWorld(u0 + R.range(-spread, spread), 0);
+          pos = [p.x, p.z];
+        }
+        placed.push(pos);
+        const id = `${def.id}-${teamId || 'L'}${idx}`;
+        const edef = { id, pos, role: r, look: look + (r === 'guard' ? R.range(-0.3, 0.3) : R.range(-2, 2)), stance: 'kneel', speed: R.range(0.95, 1.25) };
+        if (r === 'patrol') {
+          const route = [];
+          for (let q = 0; q < 4; q++) {
+            const pp = belt.toWorld(u0 + R.range(-spread, spread), sign * R.range(-belt.half * 0.4, belt.half * 0.5));
+            route.push([pp.x, pp.z]);
+          }
+          edef.route = route;
+        }
+        if (r === 'guard') edef.stance = this._guardStance(pos, look);
+        const e = this._spawn(edef, R);
+        unit.add(e, teamId, role);
+        return e;
+      };
+      if (def.leader) mk(null, 'leader', 0);
+      for (const t of def.teams) for (let q = 0; q < t.size; q++) mk(t.id, q === 0 ? 'teamLeader' : 'rifleman', q + 1);
+      void size;
+    }
+    // 무전 상대
+    for (const u of this.units) u.peers = (u.def.radio || []).map((id) => this.units.find((x) => x.id === id)).filter(Boolean);
+  }
+
+  /** 경계 자리 자세: 무릎 눈높이에서 바깥 80 m가 보이면 무릎, 아니면 서서(가장자리 풀·덤불 너머) */
+  _guardStance(pos, look) {
+    const T = this.world.terrain;
+    const gy = T.heightAt(pos[0], pos[1]);
+    const tx = pos[0] + Math.sin(look) * 80;
+    const tz = pos[1] - Math.cos(look) * 80;
+    const ty = T.heightAt(tx, tz) + 1.0;
+    const s = this.senses.sight;
+    if (s.transmission(pos[0], gy + 1.0, pos[1], tx, ty, tz) > 0.3) return 'kneel';
+    return 'stand';
+  }
+
+  _spawn(def, R) {
     const e = new Enemy(def, this.ctx);
-    e.brain = new Brain(e, {
-      world: this.world,
-      findCover: (en, threat, radius, self) => this.findCover(en, threat, radius, self || en),
-      findPosts: (en, center, look, n) => this.findPosts(en, center, look, n),
-      clearOf: (x, z, self, r) => this.clearOf(x, z, self, r),
-      nearest: (en, r) => this.nearest(en, r),
-    });
+    const S = SCENARIO.skill;
+    e.skill = {
+      sway: R.range(S.sway[0], S.sway[1]),
+      reaction: R.range(S.reaction[0], S.reaction[1]),
+      rangeError: R.range(S.rangeError[0], S.rangeError[1]),
+      vision: R.range(S.vision[0], S.vision[1]),
+    };
+    e.knowledge = new ThreatKnowledge();
+    e.brain = new Brain(e, this.ctx);
+    e.shooter = new Shooter(e, { bullets: this.bullets, events: this.events }, e.skill);
+    this.senses.register(e);
     this.enemies.push(e);
     return e;
   }
 
-  /** e에서 r 안의 가장 가까운 다른 적(정상 상태) */
-  nearest(e, r) {
-    let best = null;
-    let bd = r;
-    for (const o of this.enemies) {
-      if (o === e || o.state !== 'normal') continue;
-      const d = Math.hypot(o.x - e.x, o.z - e.z);
-      if (d < bd) {
-        bd = d;
-        best = o;
-      }
+  reset() {
+    for (const e of this.enemies) {
+      this.scene.remove(e.group);
+      if (e.rifle.parent === this.scene) this.scene.remove(e.rifle);
+      this.senses.unregister(e);
     }
-    return best;
+    this.enemies.length = 0;
+    this.units.length = 0;
+    this.cover.releaseAllOccupants?.();
+    for (const p of this.cover.points) p.occ = null;
+    this.nav.queue.length = 0;
+    this.nav.active = null;
+    this.senses.reset();
+    this.time = 0;
+    this.ended = false;
+    this.seed = (this.seed * 1103515245 + 12345) % 1e9;
+    this._spawnAll();
   }
 
-  /** (x, z)에서 r 안에 다른 적(서 있는 자리·가는 곳)이 없는가 */
-  clearOf(x, z, self, r) {
-    for (const o of this.enemies) {
-      if (o === self || o.state === 'dead') continue;
-      if (Math.hypot(o.x - x, o.z - z) < r) return false;
-      if (o.moveTarget && Math.hypot(o.moveTarget[0] - x, o.moveTarget[1] - z) < r) return false;
-    }
-    return true;
-  }
-
-  /** 경계 자리: center 둘레 radius 안 나무(지름 ≥ 20 cm) 뒤(바라보는 방향 반대편) 자리 n곳 */
-  findPosts(e, center, look, n, radius = 9) {
-    const q = [];
-    this.world.hash.query(center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius, q);
-    const c = [];
-    for (const o of q) {
-      if (o.kind !== 'trunk' || o.stump || o.r0 < 0.1) continue;
-      const d = Math.hypot(o.x - center[0], o.z - center[1]);
-      if (d < 2 || d > radius) continue;
-      // 관측하려면 숲 가장자리를 따라(옆으로) 옮긴다: 바라보는 방향으로 3.5 m 넘게 깊이 들어가지 않음
-      const along = (o.x - center[0]) * look.x + (o.z - center[1]) * look.z;
-      if (along < -3.5 || along > 2) continue;
-      const px = o.x - look.x * (o.r0 + 0.5);
-      const pz = o.z - look.z * (o.r0 + 0.5);
-      if (!this.world.terrain.inMap(px, pz)) continue;
-      c.push({ x: px, z: pz, stance: rng.weighted({ kneel: 0.55, stand: 0.28, prone: 0.17 }), d });
-    }
-    c.sort(() => rng.next() - 0.5);
-    const out = [];
-    for (const p of c) {
-      if (out.length >= n) break;
-      if (out.every((o) => Math.hypot(o.x - p.x, o.z - p.z) > 3)) out.push(p);
+  _others(self) {
+    const out = this._oth || (this._oth = []);
+    out.length = 0;
+    for (const e of this.enemies) {
+      if (e === self || e.state === 'dead') continue;
+      out.push({ x: e.x, z: e.z });
+      if (e.brain.cover) out.push({ x: e.brain.cover.x, z: e.brain.cover.z });
+      if (e.moveTarget) out.push({ x: e.moveTarget[0], z: e.moveTarget[1] });
     }
     return out;
   }
 
-  reset() {
-    // 횡단자로 추가된 적 제거
-    for (const e of this.enemies.filter((x) => x.def.spawned)) {
-      this.scene.remove(e.group);
-      if (e.rifle.parent === this.scene) this.scene.remove(e.rifle);
-    }
-    this.enemies = this.enemies.filter((x) => !x.def.spawned);
-    const defs = new Map(SCENARIO.enemies.map((d) => [d.id, d]));
+  /** 총구 앞 2.5 m가 단단한 물체(줄기·통나무·흙)에 막혔는가 — 엄폐물에 대고 쏘지 않게 */
+  _muzzleClear(e, p) {
+    if (e._mcT !== undefined && this.time - e._mcT < 0.25) return e._mcV;
+    const m = e.muzzleWorld(this._mz || (this._mz = { x: 0, y: 0, z: 0 }));
+    const dx = p.x - m.x;
+    const dy = p.y - m.y;
+    const dz = p.z - m.z;
+    const l = Math.hypot(dx, dy, dz) || 1;
+    const k = Math.min(2.5, l) / l;
+    const T = this.senses.sight.transmission(m.x, m.y, m.z, m.x + dx * k, m.y + dy * k, m.z + dz * k, { skipLast: 0 });
+    e._mcT = this.time;
+    e._mcV = T > 0;
+    return e._mcV;
+  }
+
+  /** 탄이 적 옆을 지남: 초음속이면 '딱'(인지: 방향 혼동·딱-쾅 거리), 가까우면 제압 */
+  _nearMiss(b, x0, y0, z0, dx, dy, dz) {
+    if (b.shooter !== 'player') return;
+    const sp = Math.hypot(b.vx, b.vy, b.vz) || 1;
     for (const e of this.enemies) {
-      e.def = structuredClone(defs.get(e.id));
-      if (e.rifle.parent === this.scene) this.scene.remove(e.rifle);
-      e.reset();
-      e.brain.reset();
-    }
-    this.crossTimer = rng.range(SCENARIO.crossers.interval[0], SCENARIO.crossers.interval[1]);
-  }
-
-  /** 위협 반대편의 굵은 나무(직경 ≥ 25 cm)·통나무·흙둔덕 뒤 위치(다른 적과 5.5 m 이상 떨어진 곳) */
-  findCover(e, threat, radius, self = e) {
-    const q = [];
-    this.world.hash.query(e.x - radius, e.z - radius, e.x + radius, e.z + radius, q);
-    const tx = threat ? threat.x : 0;
-    const tz = threat ? threat.z : -1;
-    let best = null;
-    let bestScore = Infinity;
-    const consider = (cx, cz, r, low) => {
-      // 위협 반대편으로 비켜선 자리
-      const px = cx - tx * (r + 0.45);
-      const pz = cz - tz * (r + 0.45);
-      const d = Math.hypot(px - e.x, pz - e.z);
-      if (d > radius) return;
-      if (!this.clearOf(px, pz, self, 5.5)) return;
-      const score = d + (low ? 1.5 : 0);
-      if (score < bestScore) {
-        bestScore = score;
-        best = [px, pz];
-        best.low = low;
+      if (!e.canPerceive() || b.notified.includes(e.id)) continue;
+      if (Math.abs(e.x - x0) > 40 || Math.abs(e.z - z0) > 40) continue;
+      const c = e.chestWorld;
+      const r = pointSegDistance(c.x, c.y, c.z, x0, y0, z0, dx, dy, dz);
+      if (!(r.t > 0 && r.t < 1) || r.d > 30) continue;
+      b.notified.push(e.id);
+      const g = flybyGeometry(x0 + dx * r.t, y0 + dy * r.t, z0 + dz * r.t, b.vx / sp, b.vy / sp, b.vz / sp, sp, r.d, c);
+      if (g.supersonic) this.senses.crack(e, { shotId: b.id, distance: r.d, emit: g.emit, supersonic: true });
+      // 제압: 가까울수록 크게(아음속 '휙'은 아주 가까울 때만)
+      let s = 0;
+      const tab = SUPPRESSION.nearMiss;
+      if (r.d < tab[0][0]) s = tab[0][1];
+      else if (r.d < tab[1][0]) s = tab[1][1] + (tab[0][1] - tab[1][1]) * (1 - (r.d - tab[0][0]) / (tab[1][0] - tab[0][0]));
+      else if (r.d < tab[2][0] && isSupersonic(sp)) s = tab[2][1];
+      if (s > 0) {
+        e.supp = Math.min(SUPPRESSION.max, e.supp + s);
+        e.brain.onSuppress({ type: 'nearMiss', distance: r.d, dir: { x: b.vx / sp, y: b.vy / sp, z: b.vz / sp } });
       }
-    };
-    for (const o of q) {
-      if (o.kind === 'trunk' && !o.stump && o.r0 >= 0.125) consider(o.x, o.z, o.r0, false);
-      else if (o.kind === 'log') consider((o.ax + o.bx) / 2, (o.az + o.bz) / 2, o.r + 0.1, true);
-      else if (o.kind === 'bale') consider(o.x, o.z, o.r + 0.15, false);
-      else if (o.kind === 'rootPlate') consider(o.x, o.z, o.r * 0.8, false);
     }
-    for (const b of WORLD.berms) {
-      if (Math.hypot(b.x - e.x, b.z - e.z) < radius + b.length / 2) consider(b.x, b.z, b.width / 2, true);
-    }
-    return best;
   }
 
+  // ---------------------------------------------------------------------------
   update(dt) {
+    this.time += dt;
+    this.senses.update(dt);
+    this.nav.update();
+    for (const u of this.units) u.update(dt);
+    this._casualtyAid();
     for (const e of this.enemies) {
       e.brain.update(dt);
       e.update(dt);
+      const sh = e.shooter;
+      const st = e.stance === 'prone' || e.state === 'down' ? 'prone' : e.stance === 'kneel' ? 'crouch' : 'stand';
+      const c = e.brain.cover;
+      const rested = c && Math.hypot(c.x - e.x, c.z - e.z) < 1.2 ? (c.kind === 'trunk' || c.kind === 'bale' ? 'trunk' : 'ground') : null;
+      const wound = e.state === 'down' ? 2.3 : e.clutch === 'arm' ? 3 : e.clutch === 'chest' ? 2 : 1;
+      sh.update(dt, { stance: st, speed: e.speed, supp: Math.min(1, e.supp), rest: rested, wound });
     }
-    // 들판 횡단자
-    this.crossTimer -= dt;
-    if (this.crossTimer <= 0) {
-      this.crossTimer = rng.range(SCENARIO.crossers.interval[0], SCENARIO.crossers.interval[1]);
-      const active = this.enemies.filter((e) => e.brain.mode === 'cross' && e.state === 'normal').length;
-      if (active < SCENARIO.crossers.maxConcurrent && this.enemies.length < 24) {
-        const route = rng.pick(SCENARIO.crossers.routes);
-        // 출발점에 다른 적이 있으면 이번에는 건너뜀(몰려 나오지 않게)
-        if (this.clearOf(route[0][0], route[0][1], null, 12)) {
-          const def = { id: `x${++this.crosserCount}`, behavior: 'cross', waypoints: route, speed: rng.range(1.25, 1.6), spawned: true };
-          this._spawn(def);
+    this._checkEnd();
+  }
+
+  /** 부상자 구조 배정: 위협에서 가려진 자리의 부상자, 제압당하지 않은 가장 가까운 동료 */
+  _casualtyAid() {
+    if (this.time - (this._aidT || 0) < 2) return;
+    this._aidT = this.time;
+    for (const cas of this.enemies) {
+      if (cas.state !== 'down' || cas.dead || cas.dragged || cas.dragBy || !cas.unit) continue;
+      const pic = cas.unit.picture();
+      if (pic) {
+        const k = this.nav.idx(cas.x, cas.z);
+        if (k >= 0 && this.nav.exposure(k, pic) > 0.2) continue; // 보이는 자리면 위험
+      }
+      let best = null;
+      let bd = 40;
+      for (const m of cas.unit.alive) {
+        if (m.supp > 0.4 || m.role === 'leader' || m.brain.task.type === 'aid' || m.brain.task.type === 'move') continue;
+        const d = Math.hypot(m.x - cas.x, m.z - cas.z);
+        if (d < bd) {
+          bd = d;
+          best = m;
         }
       }
+      if (best) {
+        best.brain.task = { type: 'aid', casualty: cas };
+        cas.dragBy = null;
+      }
+    }
+  }
+
+  _checkEnd() {
+    if (this.ended) return;
+    let active = 0;
+    let down = 0;
+    let withdrawn = 0;
+    for (const e of this.enemies) {
+      if (e.withdrawn) withdrawn++;
+      else if (e.state === 'normal') active++;
+      else if (e.state === 'down' && !e.incapacitated && !e.dead && e.rifleHeld) active++;
+      else down++;
+    }
+    this.counts = { active, down, withdrawn, total: this.enemies.length };
+    if (active === 0) {
+      this.ended = true;
+      this.events.emit('engagement:end', { reason: 'enemies', ...this.counts });
     }
   }
 
   get aliveCount() {
-    return this.enemies.filter((e) => e.state === 'normal').length;
+    return this.enemies.filter((e) => e.state === 'normal' && !e.withdrawn).length;
   }
 }

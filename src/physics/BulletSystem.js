@@ -12,7 +12,38 @@ import { rng } from '../core/Random.js';
 
 const DT = 0.001;
 const DEG = Math.PI / 180;
+const FLYBY_RANGE = 40; // m: 이보다 멀리 지나는 탄의 소리는 무시
 let nextId = 1;
+
+/** 초음속인가('딱' 소리가 나는가) — 탄도용 음속 기준 */
+export function isSupersonic(speed) {
+  return speed > ATMOSPHERE.speedOfSoundBallistic;
+}
+
+/**
+ * 탄이 청자 옆을 지날 때의 소리 기하.
+ * 초음속: 마하각 μ(sin μ = c/v). 청자에게 닿는 충격파는 최근접점 C보다 r/tan μ 앞(탄이 지나온 쪽)의 점 E에서 나왔고,
+ *   소리는 E 쪽에서 들린다(그래서 '딱'만으로는 사수 방향을 알 수 없다). 도착은 탄이 C를 지난 뒤 r(v/c² − √(v²−c²)/(vc)) 초.
+ * 아음속: 탄이 지나가는 소리('휙')는 최근접점에서, 거리/음속만큼 늦게.
+ * @returns {{x,y,z, distance, speed, supersonic, dir, emit:{x,y,z}, delay}}
+ */
+export function flybyGeometry(cx, cy, cz, ux, uy, uz, v, r, L) {
+  const c = ATMOSPHERE.soundSpeed;
+  const sup = isSupersonic(v);
+  let emit;
+  let delay;
+  if (sup) {
+    const sinMu = c / v;
+    const tanMu = sinMu / Math.sqrt(1 - sinMu * sinMu);
+    const back = r / tanMu;
+    emit = { x: cx - ux * back, y: cy - uy * back, z: cz - uz * back };
+    delay = r * (v / (c * c) - Math.sqrt(v * v - c * c) / (v * c));
+  } else {
+    emit = { x: cx, y: cy, z: cz };
+    delay = Math.hypot(cx - L.x, cy - L.y, cz - L.z) / c;
+  }
+  return { x: cx, y: cy, z: cz, distance: r, speed: v, supersonic: sup, dir: { x: ux, y: uy, z: uz }, emit, delay };
+}
 
 export class BulletSystem {
   constructor(world, events) {
@@ -37,7 +68,7 @@ export class BulletSystem {
     this.stats = { steps: 0, maxActive: 0 };
   }
 
-  /** 표적(적 히트박스 등) 등록: fn(x0,y0,z0,dx,dy,dz, hits[]) 가 {t0,t1,target,part,nx,ny,nz} 추가 */
+  /** 표적(적·플레이어 히트박스) 등록: fn(x0,y0,z0,dx,dy,dz, hits[], bullet) 가 {t0,t1,target,part,nx,ny,nz} 추가 */
   addTargetProvider(fn) {
     this.targetProviders.push(fn);
   }
@@ -158,7 +189,7 @@ export class BulletSystem {
           hits.push({ t0: Math.max(0, h.t0), t1: h.t1, kind: 'volume', obj: o, material: o.material });
       }
     }
-    for (const fn of this.targetProviders) fn(x0, y0, z0, dx, dy, dz, hits);
+    for (const fn of this.targetProviders) fn(x0, y0, z0, dx, dy, dz, hits, b);
 
     // 지면: 끝점이 땅 아래이거나, 지면 가까이에서 중간점이 땅 아래
     const gy1 = w.terrain.heightAt(b.x, b.z);
@@ -179,23 +210,20 @@ export class BulletSystem {
     // 지면 식생 덮개(그루터기·잡초·해바라기): 낮게 나는 탄만
     if (Math.min(y0 - gy0, b.y - gy1) < 2.3) this._cover(b, x0, y0, z0, dx, dy, dz, segLen, gy0, gy1, groundT);
 
-    // 근탄(제압) 통지
+    // 근탄(제압·적 청각) 통지
     if (this.nearMissProvider) this.nearMissProvider(b, x0, y0, z0, dx, dy, dz);
+    // 청자(플레이어) 근처를 지나는 남의 탄: 초음속이면 마하 원뿔 '딱'(탄 경로 위 방출점에서), 아음속이면 '휙'
     if (this.listener && b.shooter !== 'player' && !b.flybyDone) {
       const L = this.listener();
       const r = pointSegDistance(L.x, L.y, L.z, x0, y0, z0, dx, dy, dz);
-      if (r.d < 15 && r.t > 0 && r.t < 1) {
+      if (r.d < FLYBY_RANGE && r.t > 0 && r.t < 1) {
         b.flybyDone = true;
         const sp = this._speed(b);
-        this.events.emit('bullet:flyby', {
-          x: x0 + dx * r.t,
-          y: y0 + dy * r.t,
-          z: z0 + dz * r.t,
-          distance: r.d,
-          speed: sp,
-          supersonic: sp > ATMOSPHERE.speedOfSoundBallistic,
-          shooter: b.shooter,
-        });
+        const info = flybyGeometry(x0 + dx * r.t, y0 + dy * r.t, z0 + dz * r.t, b.vx / sp, b.vy / sp, b.vz / sp, sp, r.d, L);
+        info.shooter = b.shooter;
+        info.bulletId = b.id;
+        info.origin = { x: b.ox, y: b.oy, z: b.oz };
+        this.events.emit('bullet:flyby', info);
       }
     }
 

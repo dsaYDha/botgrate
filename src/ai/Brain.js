@@ -1,499 +1,697 @@
-// 적 판단. 1단계: 경계·순찰·들판 횡단 + 근탄·근처 탄착·동료 피격에 대한 반응(2단계의 사격·탐지는 없다).
-// 노출을 짧게 하는 실제 보병 습관:
-//   경계: 한 자리에 오래 서 있지 않는다. 근처 나무 옆 자리 몇 곳을 8~20 s마다 옮겨 다니며 대개 무릎·엎드려 관측.
-//   순찰: 숲 안에서도 서서 오래 멈추지 않고, 멈출 때는 무릎. 구간마다 낮은 자세로 걷기도 한다.
-//   들판 횡단: 직선 행군이 아니라 3~5 s 짧은 약진(질주) → 엎드리거나 무릎(2~6 s) → 다시 약진. 약진마다 옆으로 비틀고 속도가 다르다.
-//   적끼리 5~6 m 이상 떨어진 자리를 고른다.
-// 근탄(초음속 탄이 가까이 스치는 '딱')·근처 탄착·동료 피격 → 0.3~0.8 s 뒤 엎드리거나 가까운 엄폐물로.
-// 탄이 도착하기 전에는 반응하지 못한다(첫 발이 가장 중요). 숨은 뒤에는 2~4 s씩 내다보고(줄기 반대쪽·다른 높이),
-// 몇 번 내다본 뒤 수 m 옆 다른 엄폐물로 옮겨 다시 나온다.
+// 적 병사 한 명의 판단(2단계). 아는 것은 인지 시스템을 거친 자기 지식(knowledge)과 부대에서 전해 들은 것뿐이다
+// (플레이어의 실제 좌표를 읽지 않는다).
 //
-// 2단계(적 AI·반격)를 붙일 자리:
-//   Perception.canSee/onSound  — 시야·청각(총성 'shot' 이벤트, 탄 스침 'bullet:flyby')
-//   Brain.combat               — 사격 결정. 적 사격은 BulletSystem.fire({shooter: this.enemy.id, ...})를 그대로 쓰면 된다.
-//   Brain.squad                — 분대 전술(엄호·기동).
+// 평시: 숲 가장자리 경계(맡은 방향 ±50° 훑어보기)·숲 안 순찰·휴식(덜 살핌).
+// 의심: 멈춰서 낮은 자세로 그쪽을 집중해서 본다. 아무것도 없으면 다시 평시.
+// 접촉(근탄 '딱'·근처 탄착·동료 피격·총성 확인): 0.3~0.8 s(숙련도) 뒤 엎드리거나 가장 가까운 진짜 엄폐물
+//   (굵은 줄기·통나무·둔덕·배수로·짚 더미·뿌리판 — 위협 방위를 막아 주는 자리)로 → 방향 추정 → 반격.
+// 엄폐 사격: 숨어 있다가(제압당하면 오래) 몸을 조금만 내밀고(줄기 옆 반걸음·낮은 엄폐 위로 무릎) 조준 시간 뒤 쏘고 숨는다.
+//   다시 쏠 때는 가끔 몇 m 옆 다른 엄폐로 옮긴다.
+//   보이면 조준 단발(가까우면 짧은 점사), 안 보이지만 위치를 알면 그 언저리로 제압 점사(2~5발, 간격을 두고).
+// 이동(측면 기동·접근·철수): A* 길(지형·식생 + 아는 위협에서 보이는 곳은 비쌈)을 따라. 노출 구간은 3~5 s 약진 후 엎드림,
+//   짝끼리 번갈아(한 짝이 움직이는 동안 다른 짝은 엄호).
+// 부상자: 위험이 낮을 때(그 자리가 위협에서 가려져 있고 내가 제압당하지 않음) 끌어서 엄폐물 뒤로.
+// 팔·다리 부상자는 엎드린 채 제한적으로(흔들림 2~3배) 계속 쏜다.
 
 import { clamp, lerp, wrapAngle } from '../core/math.js';
 import { rng } from '../core/Random.js';
 
-export class Perception {
-  constructor(enemy) {
-    this.enemy = enemy;
-  }
-  /** 2단계: 시선 검사(풀·잎 은폐, 거리, 조명). 1단계는 항상 못 봄. */
-  canSee(/* target */) {
-    return false;
-  }
-  /** 2단계: 소리 인지(총성 방향 추정 등). 1단계는 무시. */
-  onSound(/* ev */) {}
-}
-
 const DEG = Math.PI / 180;
-// 반응·노출 시간(s)
+
 export const BEHAVIOR = {
-  reaction: [0.3, 0.8], // 근탄을 듣고 몸을 움직이기 시작할 때까지
-  postObserve: [8, 20], // 경계 자리 한 곳에서 관측하는 시간
-  rush: [3, 5], // 들판 약진 한 번
-  rushSpeed: [3.6, 5.2], // m/s
-  rushPause: [2, 6], // 약진 사이 엎드려/무릎
-  hideFirst: [4, 9], // 숨고 처음 내다보기까지
-  peek: [2, 4], // 내다보는 노출 시간
-  peekGap: [4, 10], // 내다보기 사이
-  peeks: [1, 3], // 옮기기 전 내다보는 횟수
-  spacing: 5.5, // 적끼리 최소 간격(m)
+  reaction: [0.3, 0.8], // 근탄을 듣고 몸을 움직이기 시작할 때까지(숙련도 배율)
+  postObserve: [10, 25],
+  hideTime: [2.5, 6], // 숨었다가 다시 내다보기까지
+  exposeTime: [2.5, 5.5], // 내다보고 쏘는 시간
+  relocateChance: 0.3,
+  coverSearch: 14, // 엄폐물 찾는 반경(m)
+  rush: [3, 5],
+  rushPause: [2, 5],
+  spacing: 4.5,
+  suppressBurst: [2, 5],
+  suppressGap: { slow: [6, 12], normal: [3.5, 7], rapid: [1.8, 3.5] },
+  maxRange: 450, // 이보다 멀면 거의 쏘지 않음(조준 사격 유효 거리)
+  suppressMaxErr: 70, // 이보다 오차가 크면 제압 사격도 안 함(탄 낭비)
+  ammoReserve: 2, // 예비 탄창이 이만큼 남으면 제압 사격을 아낀다
 };
 
 export class Brain {
   constructor(enemy, ctx) {
-    this.enemy = enemy;
-    this.ctx = ctx; // {world, findCover(e, threat, radius, avoid), findPosts(e, center, look, n), clearOf(x, z, self, r), nearest(e, r)}
-    this.perception = new Perception(enemy);
-    this.combat = null; // 2단계
+    this.e = enemy;
+    this.ctx = ctx; // {world, cover, nav, events, sight, time(), others()}
     this.reset();
   }
 
   reset() {
-    const d = this.enemy.def;
-    this.mode = d.behavior; // guard | patrol | cross
-    this.home = d.behavior;
-    this.wp = 1 % ((d.waypoints && d.waypoints.length) || 1);
-    this.wait = rng.range(0, 3);
-    this.reactAt = -1;
-    this.hideUntil = 0;
-    this.threat = null; // 위협 방향(적 → 사수, 수평 단위벡터)
-    this.lookTimer = 0;
-    this.lookTarget = 0;
+    const d = this.e.def;
+    this.task = { type: 'peace', role: d.role };
+    this.mode = 'peace';
     this.time = 0;
-    this.pendingReaction = null;
-    this.finished = false;
-    this.posts = null;
-    this.postIdx = 0;
+    this.cover = null;
+    this.coverHidden = null; // 숨는 자리 [x,z]
+    this.peek = null;
+    this.path = null;
+    this.pathIdx = 0;
+    this.pathReq = null;
+    this.pathDest = null;
+    this.rush = null;
+    this.reactAt = -1;
+    this.reactInfo = null;
+    this.lookTimer = 0;
+    this.lookYawT = 0;
     this.postUntil = rng.range(BEHAVIOR.postObserve[0], BEHAVIOR.postObserve[1]);
-    this.rush = null; // 들판 약진 상태
-    this.hide = null; // 숨기·내다보기 상태
-    this.legStance = 'stand';
-    this.onLeg = false;
-    this.detour = null;
-    this.yieldLeg = null;
+    this.alertSince = -1;
+    this.nextSuppress = 0;
+    this.lastHit = -100;
+    this.aid = null;
+    this.dragging = null;
+    this.wp = 0;
+    this.wait = 0;
+    this.supT = null;
+    this.departAt = 0;
+    this.status = '평시';
   }
 
-  get _lookDir() {
-    const d = this.enemy.def;
-    const look = d.look || [0, 360];
-    const a = ((look[0] + look[1]) / 2) * DEG;
-    return { x: Math.sin(a), z: -Math.cos(a) };
+  // ---------------------------------------------------------------------------
+  // 바깥에서 오는 일
+  setTask(t) {
+    const cur = this.task;
+    if (cur.type === 'withdrawn') return;
+    if (cur.type === 'aid' && t.type !== 'move') return; // 부상자 구조 중에는 계속
+    if (cur.type === t.type && cur.type === 'move' && cur.dest && t.dest && Math.hypot(cur.dest[0] - t.dest[0], cur.dest[1] - t.dest[1]) < 5) {
+      cur.mode = t.mode;
+      return;
+    }
+    if (cur.type === t.type && cur.type !== 'move') {
+      Object.assign(cur, t);
+      return;
+    }
+    this.task = { ...t };
+    this.supT = null;
+    if (t.type === 'move') {
+      this.path = null;
+      this.pathDest = null;
+      this.departAt = 0;
+      this._releaseCover();
+    }
+  }
+
+  onPhase(p) {
+    if (p === 'contact' && this.task.type === 'peace') this.task = { type: 'hold' };
+    if (p === 'alert' && this.task.type === 'peace') this.task = { type: 'alert' };
+    if (p === 'peace' && (this.task.type === 'alert' || this.task.type === 'hold')) this.task = { type: 'peace', role: this.e.def.role };
+  }
+
+  onShared() {
+    if (this.task.type === 'peace') this.task = { type: 'alert' };
+  }
+
+  /** 인지 시스템 알림 */
+  onObservation(kind) {
+    const e = this.e;
+    if (kind === 'sight') {
+      e.unit?.shout(e, 'contact');
+      if (this.task.type === 'peace' || this.task.type === 'alert') this._startReaction({ type: 'seen' }, 0.6);
+    } else if (kind === 'bang' || kind === 'flash') {
+      e.unit?.onUnderFire();
+      if (this.task.type === 'peace' || this.task.type === 'alert') this.task = { type: 'hold' };
+      // 어디서 쏘는지 짐작이 서면 외친다("정면 300, 숲띠 가장자리!")
+      if (kind === 'flash' || e.knowledge.err < 150) e.unit?.shout(e, 'contact');
+    } else if (kind === 'glimpse' || kind === 'step' || kind === 'handling') {
+      if (this.task.type === 'peace') this.task = { type: 'alert' };
+      if (kind === 'glimpse' && rng.next() < 0.5) e.unit?.shout(e, 'suspicious');
+    } else if (kind === 'allyShot') {
+      if (this.task.type === 'peace') this.task = { type: 'alert' };
+    }
   }
 
   /** 근탄·근처 탄착·동료 피격 */
   onSuppress(info) {
-    const e = this.enemy;
-    if (e.state !== 'normal') return;
-    // 위협 방향: 탄이 날아온 반대 방향
+    const e = this.e;
+    e.unit?.onUnderFire();
     if (info.dir) {
-      const l = Math.hypot(info.dir.x, info.dir.z) || 1;
-      this.threat = { x: -info.dir.x / l, z: -info.dir.z / l };
+      // 탄이 날아온 방향: 탄 경로를 거슬러 올라간 쪽(정확한 사수 위치는 모른다)
+      this.fireDir = { x: -info.dir.x, z: -info.dir.z, t: this.time };
     }
-    if (this.mode === 'hide' || this.mode === 'toCover' || this.mode === 'down' || this.mode === 'relocate') {
-      // 숨어 있는 중: 더 오래 숨고, 내다보던 중이면 바로 다시 숨는다
-      if (this.hide) {
-        this.hide.peeksLeft = Math.max(this.hide.peeksLeft, 1);
-        if (this.hide.peeking) this._endPeek();
-        this.hide.next = Math.max(this.hide.next, this.time + rng.range(6, 14));
-      }
-      this.hideUntil = Math.max(this.hideUntil, this.time + rng.range(10, 25));
-      return;
-    }
-    if (!this.pendingReaction) {
-      // 사람의 반응 시간(소리를 듣고 판단해 몸을 던지기까지)
-      this.pendingReaction = { at: this.time + rng.range(BEHAVIOR.reaction[0], BEHAVIOR.reaction[1]), info };
-    }
+    if (!this.reactInfo || this.time > this.reactAt + 2) this._startReaction(info, 1);
+  }
+
+  _startReaction(info, mul) {
+    const sk = this.e.skill;
+    this.reactAt = this.time + rng.range(BEHAVIOR.reaction[0], BEHAVIOR.reaction[1]) * sk.reaction * mul * (this.task.role === 'rest' ? 1.5 : 1);
+    this.reactInfo = info;
   }
 
   onWounded(kind) {
-    this.pendingReaction = null;
-    const e = this.enemy;
+    this.reactInfo = null;
+    this.lastHit = this.time;
     if (kind === 'arm' || kind === 'lung') {
-      // 정상 행동 불가: 엄폐물 쪽으로 몸을 숨기러 감
-      const cover = this.ctx.findCover(e, this.threat, 12);
-      if (cover) {
-        this.mode = 'toCover';
-        this.coverPos = cover;
-        e.setStance('stand');
-        e.setMove(cover, kind === 'lung' ? 1.4 : 3.0);
-      } else {
-        this.mode = 'down';
-        e.setStance('prone');
-        e.setMove(null, 0);
-      }
-      this.hide = null;
-      this.hideUntil = this.time + 1e6;
+      // 몸을 숨기러
+      this.task = { type: 'hold' };
+      this.cover = null;
     }
   }
 
   onCrawlStart() {
-    const e = this.enemy;
-    const cover = this.ctx.findCover(e, this.threat, 15);
-    if (cover) e.setMove(cover, 0);
+    const e = this.e;
+    const th = this._threatPoint();
+    const c = this.ctx.cover.find({ x: e.x, z: e.z, r: 15, threat: th, self: e, spacing: 0 });
+    if (c) e.setMove([c.x, c.z], 0);
   }
 
-  _react() {
-    const e = this.enemy;
-    const cover = rng.next() < 0.8 ? this.ctx.findCover(e, this.threat, 9) : null;
-    this.rush = null;
-    if (cover) {
-      this.mode = 'toCover';
-      this.coverPos = cover;
-      e.setStance('crouchMove');
-      e.setMove(cover, rng.range(3.8, 4.8));
-    } else {
-      // 엄폐물이 없으면 그 자리에 엎드린다(그루터기 밭이면 정면에서 거의 머리만 보인다)
-      this.mode = 'down';
-      e.setStance('prone');
-      e.setMove(null, 0);
-      this.downUntil = this.time + rng.range(6, 15);
-    }
-    this.hide = null;
-    this.hideUntil = this.time + rng.range(15, 35);
+  // ---------------------------------------------------------------------------
+  /** 내가 생각하는 위협 위치(지식 > 탄이 온 방향 > 없음) */
+  _threatPoint() {
+    const K = this.e.knowledge;
+    if (K.has && K.threat) return { x: K.x, z: K.z };
+    if (this.fireDir && this.time - this.fireDir.t < 60) return { x: this.e.x + this.fireDir.x * 200, z: this.e.z + this.fireDir.z * 200 };
+    if (K.has) return { x: K.x, z: K.z };
+    const u = this.e.unit?.picture();
+    if (u) return { x: u.x, z: u.z };
+    return null;
   }
 
   update(dt) {
     this.time += dt;
-    const e = this.enemy;
-    if (e.state !== 'normal') return;
-    if (this.pendingReaction && this.time >= this.pendingReaction.at) {
-      this.pendingReaction = null;
-      this._react();
+    const e = this.e;
+    if (e.state === 'dead') return;
+    if (e.state !== 'normal') {
+      this._wounded(dt);
+      return;
     }
-    switch (this.mode) {
-      case 'guard':
-        this._guard(dt);
+    if (this.task.type === 'withdrawn') {
+      this._withdrawn(dt);
+      this._weapon(dt, null);
+      return;
+    }
+    // 반응(엎드림·엄폐)
+    if (this.reactInfo && this.time >= this.reactAt) {
+      const info = this.reactInfo;
+      this.reactInfo = null;
+      if (this.task.type === 'peace' || this.task.type === 'alert') this.task = { type: 'hold' };
+      this._takeCover(info.type === 'seen' ? 0.4 : 1);
+    }
+    let fire = null;
+    switch (this.task.type) {
+      case 'peace':
+        this._peace(dt);
         break;
-      case 'patrol':
-        this._followPath(dt);
+      case 'alert':
+        this._alert(dt);
         break;
-      case 'cross':
-        this._cross(dt);
+      case 'hold':
+        fire = this._fight(dt, false);
         break;
-      case 'toCover':
-        if (!e.moveTarget) this._startHide();
-        this._faceThreat(dt);
+      case 'suppress':
+        fire = this._fight(dt, true);
         break;
-      case 'down':
-        this._faceThreat(dt);
-        if (this.time > this.downUntil) {
-          // 엎드린 자리에서 수 m 옆 엄폐물로 기어가거나, 횡단 중이면 비튼 방향으로 다시 약진
-          if (this.home === 'cross') {
-            this.mode = 'cross';
-            this.rush = null;
-            this.rushPause = 0;
-          } else this._relocate(true);
-        }
+      case 'move':
+        fire = this._move(dt);
         break;
-      case 'hide':
-        this._hideUpdate(dt);
-        break;
-      case 'relocate':
-        this._faceThreat(dt);
-        if (!e.moveTarget) {
-          this.mode = 'cautious';
-          this.cautiousUntil = this.time + rng.range(20, 40);
-          // 다시 나올 때는 다른 높이로
-          e.setStance(this.coverPos && this.coverPos.low ? 'prone' : rng.next() < 0.7 ? 'kneel' : 'stand');
-          if (this.home === 'guard') {
-            e.def.pos = [e.x, e.z];
-            this.posts = null;
-          }
-        }
-        break;
-      case 'cautious':
-        // 조심스럽게: 낮은 자세로 원래 행동
-        if (this.home === 'guard') this._guard(dt, true);
-        else if (this.home === 'cross') this._cross(dt);
-        else this._followPath(dt, 0.7, true);
-        if (this.time > this.cautiousUntil) this.mode = this.home;
+      case 'aid':
+        this._aid(dt);
         break;
       default:
         break;
     }
+    this._weapon(dt, fire);
   }
 
   // ---------------------------------------------------------------------------
-  // 경계: 근처 나무 옆 자리 몇 곳을 옮겨 다니며 관측(서서는 짧게)
-  _guard(dt, cautious = false) {
-    const e = this.enemy;
+  // 평시
+  _peace(dt) {
+    const e = this.e;
     const d = e.def;
-    if (!this.posts) {
-      const center = d.pos || [e.x, e.z];
-      this.posts = [{ x: center[0], z: center[1], stance: d.pose === 'kneel' ? 'kneel' : 'stand' }, ...this.ctx.findPosts(e, center, this._lookDir, 3)];
-      this.postIdx = 0;
-    }
-    const post = this.posts[this.postIdx];
-    if (!e.moveTarget) {
-      if (Math.hypot(e.x - post.x, e.z - post.z) > 0.6) {
-        e.setStance('crouchMove');
-        e.setMove([post.x, post.z], rng.range(1.1, 1.6));
-      } else {
-        e.setStance(cautious && post.stance === 'stand' ? 'kneel' : post.stance);
-        this.postUntil -= dt;
-        if (this.postUntil <= 0) {
-          // 다른 자리로(다른 적과 겹치지 않게)
-          let next = this.postIdx;
-          for (let tries = 0; tries < 4; tries++) {
-            const k = rng.int(0, this.posts.length - 1);
-            if (k !== this.postIdx && this.ctx.clearOf(this.posts[k].x, this.posts[k].z, e, BEHAVIOR.spacing)) {
-              next = k;
-              break;
-            }
-          }
-          this.postIdx = next;
-          this.postUntil = rng.range(BEHAVIOR.postObserve[0], BEHAVIOR.postObserve[1]);
-          const p = this.posts[next];
-          p.stance = rng.weighted({ kneel: 0.55, stand: 0.28, prone: 0.17 });
+    this.status = d.role === 'guard' ? '경계' : d.role === 'patrol' ? '순찰' : '휴식';
+    if (d.role === 'patrol' && d.route) {
+      if (!e.moveTarget) {
+        if (this.wait > 0) {
+          this.wait -= dt;
+          e.setStance('kneel');
+        } else {
+          const p = d.route[this.wp % d.route.length];
+          this.wp++;
+          e.setStance('stand');
+          e.setMove([p[0] + rng.range(-1, 1), p[1] + rng.range(-1, 1)], d.speed || 1.1);
+          this.wait = rng.next() < 0.5 ? rng.range(3, 8) : 0;
         }
       }
+      this._scan(dt, e.heading, 35 * DEG, 0.35);
+      return;
     }
-    // 머리만 돌리다가 크게 벗어나면 몸을 돌림
-    const look = d.look || [0, 360];
+    if (d.role === 'rest') {
+      e.setStance('kneel');
+      this._scan(dt, d.look || e.heading, 70 * DEG, 0.6, -0.25);
+      return;
+    }
+    // 경계: 자리에서 맡은 방향을 훑는다(자세는 시작 때 정한 것: 가장자리 풀 너머가 보이는 높이)
+    if (!e.moveTarget && Math.hypot(e.x - d.pos[0], e.z - d.pos[1]) > 1.2) {
+      e.setStance('crouchMove');
+      e.setMove([d.pos[0], d.pos[1]], 1.2);
+    } else if (!e.moveTarget) e.setStance(d.stance || 'kneel');
+    this._scan(dt, d.look, 50 * DEG, 0.45);
+  }
+
+  /** 시선: 기준 방위 ± 반폭을 1~3 s마다 옮겨 보며 훑기 */
+  _scan(dt, center, half, rate, pitch = 0) {
+    const e = this.e;
     this.lookTimer -= dt;
     if (this.lookTimer <= 0) {
-      this.lookTimer = rng.range(2.5, 7);
-      this.lookTarget = lerp(look[0], look[1], rng.next()) * DEG;
+      this.lookTimer = rng.range(1.0, 3.0);
+      this.lookYawT = center + rng.range(-half, half);
     }
-    if (!e.moveTarget) {
-      const rel = wrapAngle(this.lookTarget - e.heading);
-      if (Math.abs(rel) > 0.9) e.heading += clamp(rel, -1.2 * dt, 1.2 * dt);
-      e.lookYaw = lerp(e.lookYaw, clamp(-rel, -1.0, 1.0), 1 - Math.exp(-dt * 2));
-      e.lookPitch = Math.sin(this.time * 0.3) * 0.05;
-    }
+    this._lookToward(this.lookYawT, dt, rate, pitch);
   }
 
-  // 순찰: 구간마다 서서 걷기 또는 낮은 자세, 멈출 때는 무릎. 다른 적과 붙으면 양보하거나 비켜 간다.
-  _followPath(dt, speedMul = 1, low = false) {
-    const e = this.enemy;
-    const wps = e.def.waypoints;
-    if (!wps) return;
-    if (e.moveTarget) {
-      this._keepApart();
-      e.lookYaw = lerp(e.lookYaw, Math.sin(this.time * 0.4) * 0.5, 1 - Math.exp(-dt));
-      return;
-    }
-    // 비켜 가기 끝 → 원래 목표로
-    if (this.detour) {
-      e.setStance(this.legStance);
-      e.setMove(this.detour.resume, this.detour.speed);
-      this.detour = null;
-      return;
-    }
-    // 구간 끝: 가끔 무릎 꿇고 멈춰 관측
-    if (this.onLeg) {
-      this.onLeg = false;
-      this.wait = rng.next() < 0.4 ? rng.range(2, 6) : 0;
-    }
-    if (this.wait > 0) {
-      this.wait -= dt;
-      e.setStance('kneel');
-      e.lookYaw = Math.sin(this.time * 0.7) * 0.6;
-      return;
-    }
-    // 양보하느라 멈췄던 구간 다시
-    if (this.yieldLeg) {
-      e.setStance(this.legStance);
-      e.setMove(this.yieldLeg.target, this.yieldLeg.speed);
-      this.yieldLeg = null;
-      this.onLeg = true;
-      return;
-    }
-    const target = wps[this.wp % wps.length];
-    // 경로 위 같은 자리로 몰리지 않게 옆으로 조금
-    const jx = target[0] + rng.range(-1.5, 1.5);
-    const jz = target[1] + rng.range(-1.5, 1.5);
-    this.legStance = low || rng.next() < 0.45 ? 'crouchMove' : 'stand';
-    e.setStance(this.legStance);
-    e.setMove([jx, jz], (e.def.speed || 1.1) * speedMul * (this.legStance === 'crouchMove' ? 0.8 : 1));
-    this.onLeg = true;
-    this.wp++;
+  /** 방위 b(rad)를 보도록 머리(필요하면 몸)를 돌림 */
+  _lookToward(b, dt, rate = 2, pitch = 0) {
+    const e = this.e;
+    const rel = wrapAngle(b - e.heading);
+    if (!e.moveTarget && Math.abs(rel) > 0.85) e.heading += clamp(rel, -1.6 * dt, 1.6 * dt);
+    const want = clamp(-wrapAngle(b - e.heading), -1.0, 1.0);
+    e.lookYaw += (want - e.lookYaw) * (1 - Math.exp(-dt * 4 * rate));
+    e.lookPitch += (pitch - e.lookPitch) * (1 - Math.exp(-dt * 3));
   }
 
-  /** 걷다가 다른 적과 4.5 m 안으로 붙으면: 둘 다 움직이면 한쪽이 무릎 꿇고 기다리고, 서 있는 적 옆이면 크게 돌아간다 */
-  _keepApart() {
-    const e = this.enemy;
-    const o = this.ctx.nearest(e, 4.5);
-    if (!o) return;
-    if (o.moveTarget && e.id > o.id) {
-      this.yieldLeg = { target: e.moveTarget, speed: e.moveSpeed };
-      e.setMove(null, 0);
-      this.onLeg = false;
-      this.wait = rng.range(2.5, 4.5);
-    } else if (!o.moveTarget && !this.detour) {
-      const dx = e.moveTarget[0] - e.x;
-      const dz = e.moveTarget[1] - e.z;
-      const L = Math.hypot(dx, dz) || 1;
-      if (L < 3) return;
-      const nx = -dz / L;
-      const nz = dx / L;
-      const side = (o.x - e.x) * nx + (o.z - e.z) * nz > 0 ? -1 : 1;
-      this.detour = { resume: e.moveTarget, speed: e.moveSpeed };
-      e.setMove([o.x + nx * side * 6, o.z + nz * side * 6], e.moveSpeed);
-    }
-  }
-
-  // 들판 횡단: 짧은 약진 → 엎드리거나 무릎 → 다시 약진
-  _cross(dt) {
-    const e = this.enemy;
-    const wps = e.def.waypoints;
-    if (!wps) return;
-    if (this.rushPause > 0) {
-      this.rushPause -= dt;
-      e.lookYaw = Math.sin(this.time * 0.9) * 0.5;
-      return;
-    }
-    if (!this.rush || !e.moveTarget) {
-      if (this.rush) {
-        // 약진 끝: 엎드리거나 무릎
-        e.setStance(rng.next() < 0.6 ? 'prone' : 'kneel');
-        e.setMove(null, 0);
-        this.rushPause = rng.range(BEHAVIOR.rushPause[0], BEHAVIOR.rushPause[1]);
-        this.rush = null;
-        return;
-      }
-      if (this.wp >= wps.length) {
-        // 횡단 끝: 경계 자세로
-        this.mode = 'guard';
-        this.home = 'guard';
-        e.def.pos = [e.x, e.z];
-        e.def.look = [((e.heading / DEG) - 60 + 360) % 360, ((e.heading / DEG) + 60 + 360) % 360];
-        this.posts = null;
-        return;
-      }
-      // 다음 약진: 경로 방향으로 3~5 s 거리, 옆으로 비틂
-      const target = wps[this.wp];
-      const dx = target[0] - e.x;
-      const dz = target[1] - e.z;
-      const dist = Math.hypot(dx, dz);
-      const speed = rng.range(BEHAVIOR.rushSpeed[0], BEHAVIOR.rushSpeed[1]);
-      const len = speed * rng.range(BEHAVIOR.rush[0], BEHAVIOR.rush[1]);
-      let tx;
-      let tz;
-      if (dist <= len * 1.2) {
-        tx = target[0];
-        tz = target[1];
-        this.wp++;
-      } else {
-        const ux = dx / dist;
-        const uz = dz / dist;
-        let side = rng.range(-1, 1) * len * 0.35;
-        tx = e.x + ux * len - uz * side;
-        tz = e.z + uz * len + ux * side;
-        // 다른 적이 있는 쪽이면 반대로 비튼다
-        if (!this.ctx.clearOf(tx, tz, e, BEHAVIOR.spacing)) {
-          side = -side + Math.sign(-side || 1) * 3;
-          tx = e.x + ux * len - uz * side;
-          tz = e.z + uz * len + ux * side;
-        }
-      }
-      e.setStance('stand');
-      e.setMove([tx, tz], speed);
-      this.rush = { until: this.time + len / speed + 1 };
-    }
-    e.lookYaw = lerp(e.lookYaw, 0, 1 - Math.exp(-dt * 3));
+  _lookAt(x, z, dt, rate = 2) {
+    const e = this.e;
+    this._lookToward(Math.atan2(x - e.x, -(z - e.z)), dt, rate);
   }
 
   // ---------------------------------------------------------------------------
-  // 숨기·내다보기
-  _startHide() {
-    const e = this.enemy;
-    this.mode = 'hide';
-    const low = !!(this.coverPos && this.coverPos.low);
-    this.hide = {
-      low,
-      base: [e.x, e.z],
-      peeking: false,
-      next: this.time + rng.range(BEHAVIOR.hideFirst[0], BEHAVIOR.hideFirst[1]),
-      peeksLeft: rng.int(BEHAVIOR.peeks[0], BEHAVIOR.peeks[1]),
-      side: rng.next() < 0.5 ? -1 : 1,
-    };
-    // 나무 뒤에서는 무릎, 낮은 둔덕·통나무 뒤에서는 엎드림
-    e.setStance(low ? 'prone' : 'kneel');
+  // 의심: 멈춰서 낮은 자세로 집중해서 본다
+  _alert(dt) {
+    const e = this.e;
+    this.status = '의심';
+    if (this.alertSince < 0) this.alertSince = this.time;
+    if (e.moveTarget && !this.cover) e.setMove(null, 0);
+    if (e.stance === 'stand' && (e.def.stance || 'kneel') !== 'stand') e.setStance('kneel');
+    const K = e.knowledge;
+    if (K.has) {
+      // 오차 범위 안을 천천히 훑으며
+      const b = Math.atan2(K.x - e.x, -(K.z - e.z));
+      const spread = clamp(Math.atan2(K.err, Math.hypot(K.x - e.x, K.z - e.z)), 3 * DEG, 25 * DEG);
+      this._scan(dt, b, spread, 1.2);
+    } else this._scan(dt, e.def.look ?? e.heading, 40 * DEG, 0.8);
+    if (this.time - this.alertSince > 50 && K.suspicion < 0.2) {
+      this.task = { type: 'peace', role: e.def.role };
+      this.alertSince = -1;
+    }
   }
 
-  _hideUpdate(dt) {
-    const e = this.enemy;
-    const h = this.hide;
-    this._faceThreat(dt);
-    if (!h) {
-      this._startHide();
-      return;
-    }
-    // 반걸음 옮기는 동안은 웅크려 걷고, 닿으면 자세를 정한다
-    if (h.pendingStance && !e.moveTarget) {
-      e.setStance(h.pendingStance);
-      h.pendingStance = null;
-    }
-    if (this.time < h.next) return;
-    if (h.peeking) {
-      this._endPeek();
-      return;
-    }
-    if (h.peeksLeft <= 0 || this.time > this.hideUntil + 30) {
-      this._relocate(false);
-      return;
-    }
-    // 내다보기: 줄기 옆으로 반걸음(번갈아 반대쪽) 또는 높이를 바꿔(엎드림 → 무릎, 무릎 → 서기) 2~4 s
-    h.peeking = true;
-    h.peeksLeft--;
-    h.next = this.time + rng.range(BEHAVIOR.peek[0], BEHAVIOR.peek[1]);
-    const t = this.threat || { x: 0, z: 1 };
-    if (h.low) {
-      e.setStance('kneel');
+  // ---------------------------------------------------------------------------
+  // 엄폐
+  _releaseCover() {
+    if (this.cover) this.ctx.cover.release(this.cover, this.e);
+    this.cover = null;
+    this.peek = null;
+  }
+
+  /** 위협을 막는 가장 가까운 엄폐로(없으면 그 자리에 엎드림). urgency 1 = 탄이 날아옴 */
+  _takeCover(urgency) {
+    const e = this.e;
+    const th = this._threatPoint();
+    const taken = this.ctx.others(e);
+    const c = th ? this.ctx.cover.find({ x: e.x, z: e.z, r: BEHAVIOR.coverSearch, threat: th, self: e, taken, spacing: BEHAVIOR.spacing }) : null;
+    this._releaseCover();
+    if (c && this.ctx.cover.reserve(c, e)) {
+      this.cover = c;
+      const d = Math.hypot(c.x - e.x, c.z - e.z);
+      if (d > 0.5) {
+        e.setStance(urgency > 0.7 && d < 3 ? 'prone' : 'crouchMove');
+        e.setMove([c.x, c.z], urgency > 0.7 ? rng.range(3.8, 4.8) : 2.4);
+      }
+      this.peek = { phase: 'go', until: this.time + rng.range(BEHAVIOR.hideTime[0], BEHAVIOR.hideTime[1]) };
     } else {
-      h.side = -h.side;
-      const off = rng.range(0.4, 0.65) * h.side;
-      e.setMove([h.base[0] - t.z * off, h.base[1] + t.x * off], 0.9);
-      e.setStance('crouchMove');
-      h.pendingStance = rng.next() < 0.35 ? 'stand' : 'kneel';
-    }
-  }
-
-  _endPeek() {
-    const e = this.enemy;
-    const h = this.hide;
-    h.peeking = false;
-    h.next = this.time + rng.range(BEHAVIOR.peekGap[0], BEHAVIOR.peekGap[1]);
-    if (h.low) e.setStance('prone');
-    else {
-      e.setMove(h.base, 0.9);
-      e.setStance('crouchMove');
-      h.pendingStance = 'kneel';
-    }
-  }
-
-  /** 수 m 옆 다른 엄폐물로 옮김(엎드려 있었으면 기어서) */
-  _relocate(fromProne) {
-    const e = this.enemy;
-    const t = this.threat || { x: 0, z: 1 };
-    const side = rng.next() < 0.5 ? -1 : 1;
-    // 위협 방향에 수직으로 4~10 m 옆을 중심으로 엄폐물 찾기
-    const off = rng.range(4, 10) * side;
-    const probe = { x: e.x - t.z * off, z: e.z + t.x * off };
-    const cover = this.ctx.findCover({ x: probe.x, z: probe.z, id: e.id }, this.threat, 7, e) || [probe.x, probe.z];
-    this.coverPos = cover;
-    this.mode = 'relocate';
-    this.hide = null;
-    if (fromProne || e.stance === 'prone') {
+      e.setMove(null, 0);
       e.setStance('prone');
-      e.setMove(cover, 0.45);
-    } else {
-      e.setStance('crouchMove');
-      e.setMove(cover, rng.range(2.2, 3.6));
+      this.peek = { phase: 'hidden', until: this.time + rng.range(BEHAVIOR.hideTime[0], BEHAVIOR.hideTime[1]) * 1.5, open: true };
     }
   }
 
-  _faceThreat(dt) {
-    const e = this.enemy;
-    if (!this.threat) return;
-    const want = Math.atan2(this.threat.x, -this.threat.z);
-    const rel = wrapAngle(want - e.heading);
-    if (!e.moveTarget) e.heading += clamp(rel, -1.5 * dt, 1.5 * dt);
-    e.lookYaw = lerp(e.lookYaw, 0, 1 - Math.exp(-dt * 3));
+  /** 엄폐가 지금 위협을 막아 주는가 */
+  _coverGood() {
+    const th = this._threatPoint();
+    if (!this.cover) return false;
+    if (!th) return true;
+    return this.ctx.cover.protects(this.cover, th.x, th.z);
+  }
+
+  /** 숨는 자세: 낮은 엄폐는 엎드림, 줄기·짚 더미 뒤는 무릎 */
+  _hideStance() {
+    const c = this.cover;
+    if (!c) return 'prone';
+    if (c.low || this.e.supp > 0.6) return 'prone';
+    return 'kneel';
+  }
+
+  /**
+   * 교전(엄폐 사격). suppress: 안 보여도 아는 위치로 제압 사격.
+   * @returns {object|null} 사격 의도 {mode, point, burst}
+   */
+  _fight(dt, suppress) {
+    const e = this.e;
+    const K = e.knowledge;
+    const th = this._threatPoint();
+    if (th) this._lookAt(K.has ? K.x : th.x, K.has ? K.z : th.z, dt, 1.5);
+    // 엄폐가 없거나 위협을 못 막으면 옮김
+    if (!this.peek || (!this.cover && !this.peek.open) || (this.cover && !this._coverGood() && !e.moveTarget)) {
+      this._takeCover(0.6);
+    }
+    const p = this.peek;
+    const supp = e.supp;
+    this.status = supp > 0.7 ? '제압당함(엄폐에 붙음)' : suppress ? '제압 사격' : '엄폐 사격';
+    if (p.phase === 'go') {
+      if (e.moveTarget && this.cover && Math.hypot(this.cover.x - e.x, this.cover.z - e.z) < 0.9) e.setMove(null, 0);
+      if (!e.moveTarget) {
+        p.phase = 'hidden';
+        p.until = this.time + rng.range(BEHAVIOR.hideTime[0], BEHAVIOR.hideTime[1]) * 0.6;
+        e.setStance(this._hideStance());
+        this.coverHidden = [e.x, e.z];
+      }
+      return null;
+    }
+    if (p.phase === 'hidden') {
+      e.setStance(this._hideStance());
+      // 제압당하면 내다보지 않는다
+      if (supp > 0.7) {
+        p.until = Math.max(p.until, this.time + 1.5);
+        return null;
+      }
+      if (this.time < p.until) return K.visible && !this.cover?.low ? this._fireIntent(suppress, true) : null;
+      // 내다보기
+      p.phase = 'expose';
+      p.until = this.time + rng.range(BEHAVIOR.exposeTime[0], BEHAVIOR.exposeTime[1]) * (1 - 0.4 * supp) * (e.unit && e.unit.morale < 0.55 ? 0.6 : 1);
+      this._expose();
+      return null;
+    }
+    if (p.phase === 'expose') {
+      if (this.time > p.until || supp > 0.75) {
+        // 숨기(가끔 옆 엄폐로 옮김)
+        p.phase = 'hidden';
+        p.until = this.time + rng.range(BEHAVIOR.hideTime[0], BEHAVIOR.hideTime[1]) * (1 + supp * 1.5);
+        if (this.coverHidden) {
+          e.setStance('crouchMove');
+          e.setMove(this.coverHidden, 1.0);
+        }
+        if (rng.next() < BEHAVIOR.relocateChance) this._relocate();
+        else e.setStance(this._hideStance());
+        return null;
+      }
+      // 총구가 줄기·흙에 막혔으면 일어서거나 옆 엄폐로
+      if (e.shooter.blocked) {
+        e.shooter.blocked = false;
+        if (e.stance !== 'stand' && !e.moveTarget && rng.next() < 0.5) e.setStance(e.stance === 'prone' ? 'kneel' : 'stand');
+        else this._relocate();
+      }
+      if (p.pending && !e.moveTarget) {
+        e.setStance(p.pending);
+        p.pending = null;
+      }
+      return this._fireIntent(suppress, false);
+    }
+    return null;
+  }
+
+  /** 엄폐에서 몸을 조금 내밈: 줄기·짚 더미는 옆으로 반걸음(위협 방향에 수직), 낮은 엄폐는 무릎(배수로는 둑 쪽으로) */
+  _expose() {
+    const e = this.e;
+    const c = this.cover;
+    const th = this._threatPoint();
+    if (!c || !th) {
+      e.setStance(e.stance === 'prone' && this.peek.open ? 'prone' : 'kneel');
+      return;
+    }
+    const tx = th.x - c.x;
+    const tz = th.z - c.z;
+    const l = Math.hypot(tx, tz) || 1;
+    if (c.kind === 'trunk' || c.kind === 'bale' || c.kind === 'rootPlate') {
+      const side = rng.next() < 0.5 ? -1 : 1;
+      const off = 0.55 + (c.obj && c.obj.r0 ? c.obj.r0 : 0.3);
+      e.setStance('crouchMove');
+      e.setMove([c.x - (tz / l) * off * side, c.z + (tx / l) * off * side], 1.0);
+      this.peek.pending = rng.next() < 0.3 ? 'stand' : 'kneel';
+    } else if (c.kind === 'ditch') {
+      e.setStance('prone');
+      e.setMove([c.x + (tx / l) * 0.9, c.z + (tz / l) * 0.9], 0.4);
+      this.peek.pending = 'prone';
+    } else {
+      e.setStance('kneel');
+      this.peek.pending = 'kneel';
+    }
+  }
+
+  _relocate() {
+    const e = this.e;
+    const th = this._threatPoint();
+    if (!th) return;
+    const taken = this.ctx.others(e);
+    const c = this.ctx.cover.find({
+      x: e.x,
+      z: e.z,
+      r: 10,
+      threat: th,
+      self: e,
+      taken,
+      spacing: BEHAVIOR.spacing,
+      score: (q, d) => (d < 3 ? 50 : 0) + (q === this.cover ? 100 : 0),
+    });
+    if (c && this.ctx.cover.reserve(c, e)) {
+      this.ctx.cover.release(this.cover, e);
+      this.cover = c;
+      e.setStance(c.low ? 'prone' : 'crouchMove');
+      e.setMove([c.x, c.z], c.low ? 0.45 : 2.2);
+      this.peek = { phase: 'go', until: this.time + 2 };
+    }
+  }
+
+  /** 사격 의도: 보이면 조준 사격, 아니면(제압 임무 + 위치를 앎) 그 언저리로 점사 */
+  _fireIntent(suppress, fromHide) {
+    const e = this.e;
+    const K = e.knowledge;
+    const sh = e.shooter;
+    if (!sh || !e.rifleHeld) return null;
+    if (K.visible && K.seenPoint) {
+      const sp = K.seenPoint;
+      const d = Math.hypot(sp.x - e.x, sp.z - e.z);
+      if (d > BEHAVIOR.maxRange && !suppress) return null;
+      const burst = d < 60 ? rng.int(2, 4) : d < 150 && rng.next() < 0.35 ? 2 : 1;
+      return { mode: 'aimed', point: sp, burst, vx: K.vx, vz: K.vz, rangeBias: K.rangeBias || 1 };
+    }
+    if (fromHide || !suppress || !K.has) return null;
+    // 진행 중인 제압 점사(조준점을 정하면 그 점사를 다 쏠 때까지 유지)
+    const st = this.supT;
+    if (st) {
+      if (sh.shots - st.shots0 >= st.burst || this.time > st.until) {
+        this.supT = null;
+        const rate = this.task.rate || 'normal';
+        const gap = BEHAVIOR.suppressGap[rate] || BEHAVIOR.suppressGap.normal;
+        this.nextSuppress = this.time + rng.range(gap[0], gap[1]);
+        return null;
+      }
+      return { mode: 'suppress', point: st.point, burst: st.burst };
+    }
+    if (K.err > BEHAVIOR.suppressMaxErr) return null;
+    if (sh.spare <= BEHAVIOR.ammoReserve && rng.next() < 0.7) return null;
+    const d = Math.hypot(K.x - e.x, K.z - e.z);
+    if (d > BEHAVIOR.maxRange * 1.2) return null;
+    if (this.time < this.nextSuppress) return null;
+    // 제압: 오차 분포에서 한 점, 지면 위 0.3~1 m
+    const q = K.sample(rng, 0.6);
+    const gy = this.ctx.world.terrain.heightAt(q.x, q.z);
+    const burst = rng.int(BEHAVIOR.suppressBurst[0], BEHAVIOR.suppressBurst[1]);
+    this.supT = { point: { x: q.x, y: gy + rng.range(0.3, 1.0), z: q.z }, burst, shots0: sh.shots, until: this.time + 4 + burst * 0.2 };
+    return { mode: 'suppress', point: this.supT.point, burst };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 이동(측면 기동·접근·철수)
+  _move(dt) {
+    const e = this.e;
+    const t = this.task;
+    const unit = e.unit;
+    const th = this._threatPoint();
+    this.status = t.mode === 'withdraw' ? '철수' : t.mode === 'flank' ? '측면 기동' : '접근';
+    if (!this.path && !this.pathReq && t.path && !t.pathTaken) {
+      // 부대가 찾은 길을 따라감(조원마다 시차를 두고 출발 — 숲 안에서는 한 줄로)
+      t.pathTaken = true;
+      this.path = t.path.map((q) => [q[0], q[1]]);
+      this.pathIdx = 0;
+      this.departAt = this.time + (t.order || 0) * 2.5;
+    }
+    if (this.departAt && this.time < this.departAt) {
+      e.setStance('kneel');
+      if (th) this._lookAt(th.x, th.z, dt);
+      return this._fireIntent(true, false);
+    }
+    if (!this.path && !this.pathReq) {
+      const dest = [t.dest[0] + rng.range(-6, 6), t.dest[1] + rng.range(-6, 6)];
+      this.pathDest = dest;
+      this.pathThreat = th ? { x: th.x, z: th.z } : null;
+      this.pathReq = this.ctx.nav.request([e.x, e.z], dest, th, (p) => {
+        this.pathReq = null;
+        if (p && !p.partial) {
+          this.path = p;
+          this.pathIdx = 0;
+          return;
+        }
+        // 숨겨진 길이 없음: 제자리에서 엄호 사격
+        this.task = { type: 'suppress', rate: 'normal' };
+      }, { owner: e, exposureWeight: t.mode === 'withdraw' ? 8 : 6, maxNodes: 150000 });
+    }
+    if (!this.path) {
+      if (th) this._lookAt(th.x, th.z, dt);
+      return null;
+    }
+    // 목적지 도착
+    if (this.pathIdx >= this.path.length) {
+      e.setMove(null, 0);
+      unit?.arrived(t.team);
+      if (t.mode === 'withdraw') {
+        e.setStance('kneel');
+        return null;
+      }
+      this.task = { type: 'suppress', rate: 'normal' };
+      this.peek = null;
+      return null;
+    }
+    const wp = this.path[this.pathIdx];
+    // 노출 구간인가(아는 위협에서 보이는 열린 땅)
+    const k = this.ctx.nav.idx(e.x, e.z);
+    const exposed = th && k >= 0 && this.ctx.nav.exposure(k, th) > 0.25;
+    const sup = e.supp;
+    if (exposed) {
+      // 짝 교대 약진: 내 짝 차례가 아니면 엎드려 엄호
+      const myTurn = !unit || unit.pairMoving(e.teamId, e.pair);
+      if (!this.rush) {
+        if (!myTurn || sup > 0.6 || (this.rushPauseUntil && this.time < this.rushPauseUntil)) {
+          e.setMove(null, 0);
+          e.setStance('prone');
+          if (th) this._lookAt(th.x, th.z, dt);
+          return this._fireIntent(true, false);
+        }
+        this.rush = { until: this.time + rng.range(BEHAVIOR.rush[0], BEHAVIOR.rush[1]) };
+      }
+      if (this.time > this.rush.until) {
+        this.rush = null;
+        this.rushPauseUntil = this.time + rng.range(BEHAVIOR.rushPause[0], BEHAVIOR.rushPause[1]);
+        e.setMove(null, 0);
+        e.setStance(rng.next() < 0.7 ? 'prone' : 'kneel');
+        return null;
+      }
+      e.setStance('stand');
+      e.setMove(wp, rng.range(3.8, 5.0));
+    } else {
+      // 숲 안(가려진 길): 낮은 자세로 빠르게, 끊김 없이
+      this.rush = null;
+      e.setStance(t.mode === 'withdraw' ? 'crouchMove' : 'crouchMove');
+      if (!e.moveTarget || Math.hypot(e.moveTarget[0] - wp[0], e.moveTarget[1] - wp[1]) > 0.5) e.setMove(wp, sup > 0.5 ? 1.2 : 2.3);
+      e.lookYaw += (Math.sin(this.time * 0.7) * 0.5 - e.lookYaw) * (1 - Math.exp(-dt * 2));
+    }
+    if (Math.hypot(e.x - wp[0], e.z - wp[1]) < 1.6) this.pathIdx++;
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 부상자 끌기
+  _aid(dt) {
+    const e = this.e;
+    const a = this.task;
+    const cas = a.casualty;
+    this.status = '부상자 구조';
+    if (!cas || cas.state === 'normal' || cas.dead || e.supp > 0.6) {
+      if (cas) cas.dragBy = null;
+      this.task = { type: 'hold' };
+      return;
+    }
+    if (!a.phase) a.phase = 'reach';
+    if (a.phase === 'reach') {
+      const d = Math.hypot(cas.x - e.x, cas.z - e.z);
+      if (d > 1.0) {
+        e.setStance('crouchMove');
+        e.setMove([cas.x, cas.z], 2.2);
+        return;
+      }
+      a.phase = 'drag';
+      const th = this._threatPoint();
+      const c = this.ctx.cover.find({ x: cas.x, z: cas.z, r: 18, threat: th, self: e, spacing: 0, score: (q, dd) => (dd < 3 ? 20 : 0) });
+      a.to = c ? [c.x, c.z] : null;
+      if (!a.to) {
+        this.task = { type: 'hold' };
+        return;
+      }
+      cas.dragBy = e;
+    }
+    if (a.phase === 'drag') {
+      e.setStance('crouchMove');
+      e.setMove(a.to, 0.7);
+      if (Math.hypot(e.x - a.to[0], e.z - a.to[1]) < 1.2) {
+        cas.dragBy = null;
+        cas.dragged = true;
+        this.task = { type: 'hold' };
+        e.unit?.shout(e, 'casualty');
+      }
+    }
+    void dt;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 부상: 쓰러져 있어도 팔다리 부상이고 총이 있으면 엎드린 채 제한적으로 쏜다
+  _wounded(dt) {
+    const e = this.e;
+    this.status = e.dead ? '사망' : e.incapacitated ? '전투 불능' : '부상';
+    const sh = e.shooter;
+    if (!sh) return;
+    const canFire = e.state === 'down' && !e.incapacitated && e.rifleHeld && e.lying && e.lying.mode !== 'incap';
+    if (!canFire) {
+      sh.wantRaise = false;
+      sh.setTarget(null);
+      return;
+    }
+    const K = e.knowledge;
+    let intent = null;
+    if (K.visible && K.seenPoint && Math.hypot(K.seenPoint.x - e.x, K.seenPoint.z - e.z) < 250) intent = { mode: 'aimed', point: K.seenPoint, burst: 1, rangeBias: K.rangeBias || 1 };
+    this._weapon(dt, intent, true);
+  }
+
+  _withdrawn(dt) {
+    const e = this.e;
+    this.status = '철수 완료';
+    e.setMove(null, 0);
+    e.setStance('kneel');
+    void dt;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 총: 사격 의도에 따라 들고, 조준점·점사 지정, 쏘기. 탄창이 비면 재장전(숨어서)
+  _weapon(dt, intent, wounded = false) {
+    const e = this.e;
+    const sh = e.shooter;
+    if (!sh) return;
+    // 숨은 채로 재장전: 비었거나, 쏠 일이 없고 탄이 적으면
+    if (!sh.reloading && sh.spare > 0 && (sh.rounds === 0 || (!intent && sh.mag < 8 && this.peek && this.peek.phase === 'hidden'))) {
+      sh.startReload();
+      if (sh.rounds === 0) e.unit?.shout(e, 'reloading');
+    }
+    if (intent && !sh.reloading) {
+      sh.wantRaise = true;
+      e.aimAt = intent.point;
+      sh.setTarget({ x: intent.point.x, y: intent.point.y, z: intent.point.z, mode: intent.mode, rangeBias: intent.rangeBias || 1, vx: intent.vx || 0, vz: intent.vz || 0 });
+      if (sh.burst === 0 && sh.time >= sh.nextShot) sh.setBurst(intent.burst || 1);
+      const clear = this.ctx.muzzleClear(e, intent.point);
+      const b = sh.tryFire(clear);
+      if (b) {
+        e.knowledge.firing = true;
+        this.lastShotT = this.time;
+        if (intent.mode === 'aimed') b.sawTarget = true;
+      }
+    } else {
+      e.aimAt = null;
+      sh.setTarget(null);
+      sh.wantRaise = !!(this.task.type === 'hold' || this.task.type === 'suppress') && this.peek && this.peek.phase === 'expose';
+      if (this.time - (this.lastShotT || -100) > 6) e.knowledge.firing = false;
+    }
+    void dt;
+    void wounded;
   }
 }

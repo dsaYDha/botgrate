@@ -26,6 +26,7 @@ import { WeaponModel } from '../weapon/WeaponModel.js';
 import { OpticOverlay } from '../weapon/OpticOverlay.js';
 import { BulletSystem } from '../physics/BulletSystem.js';
 import { EnemyManager } from '../enemies/EnemyManager.js';
+import { PlayerBody } from '../player/PlayerBody.js';
 import { Effects } from '../effects/Effects.js';
 import { AudioEngine } from '../audio/AudioEngine.js';
 
@@ -116,8 +117,19 @@ export class Game {
     this.effects = new Effects(this.scene, this.world, this.events, this.audio);
 
     await step('적을 배치하는 중…');
-    this.enemies = new EnemyManager(this.scene, this.world, this.events, this.bullets);
+    // 플레이어의 몸(그리지 않음): 적 탄 판정·적 시각의 표적
+    this.playerBody = new PlayerBody();
+    this.player.eye(this.eyePos);
+    this.playerBody.update(this.player, this.eyePos);
+    this.enemies = new EnemyManager(this.scene, this.world, this.events, this.bullets, { player: this.player, body: this.playerBody, weapon: this.weapon });
     this.bullets.listener = () => this.eyePos;
+    this.bullets.addTargetProvider((x0, y0, z0, dx, dy, dz, hits, b) => {
+      if (b && b.shooter === 'player') return;
+      this.playerBody.intersect(x0, y0, z0, dx, dy, dz, hits, this.playerTarget);
+    });
+    this.playerTarget = {
+      onBulletHit: (info) => this.onPlayerHit(info),
+    };
     this.debug = new DebugOverlay(document.getElementById('debug'), this.scene, this.events);
 
     // 바람
@@ -224,6 +236,7 @@ export class Game {
     this.player.update(dt, { ads: this.weapon.ads, adsHeld: this.weapon.adsWanted, lookDX: mdx, lookDY: mdy, zoom: this.zoom });
     this.weapon.update(dt, this.time);
     this.player.eye(this.eyePos);
+    this.playerBody.update(this.player, this.eyePos);
     const pose = this.weapon.computePose(this.eyePos, this.player.yaw, this.player.pitch, this.player.roll, dt);
     const cam = this.camera;
     if (this.debugCam) {
@@ -308,6 +321,12 @@ export class Game {
       eyeY: this.weapon.aim.eyeOff.y / eyeBox - kick * 25,
     });
     inp.endFrame();
+  }
+
+  /** 플레이어 피격(부상 모델은 PlayerHealth) */
+  onPlayerHit(info) {
+    if (this.health) this.health.onHit(info);
+    else console.info(`[hit] player ${info.part} from ${info.shooter} ${info.distance.toFixed(0)} m ${info.speed.toFixed(0)} m/s`);
   }
 
   _breathing() {

@@ -2,7 +2,7 @@
   "name": "windbreak-fps",
   "private": true,
   "version": "0.1.0",
-  "description": "방풍림 전투 FPS — 1단계: 전장 기반 + 사격 핵심",
+  "description": "방풍림 전투 FPS — 2단계: 적 AI와 교전",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test:ballistics": "node tests/ballistics.test.js",
     "test:accuracy": "node tests/accuracy.test.js",
+    "test:perception": "node tests/perception.test.js",
     "test:consistency": "node tools/consistency.mjs",
     "shots": "node tools/shots.mjs"
   },

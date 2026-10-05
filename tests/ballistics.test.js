@@ -26,6 +26,9 @@ import { ATMOSPHERE } from '../src/data/atmosphere.js';
 import { AMMO } from '../src/data/ammo.js';
 import { WEAPONS } from '../src/data/weapons.js';
 import { RWS_SS109, PUBLISHED_BC_G7, M4_MUZZLE_VELOCITY, PY_BALLISTICCALC_905 } from './reference/published556.js';
+import { SB_762x39, AKM_MUZZLE_VELOCITY } from './reference/published762.js';
+import { BulletSystem, isSupersonic } from '../src/physics/BulletSystem.js';
+import { EventBus } from '../src/core/EventBus.js';
 
 const TOL = 0.10; // 10%
 const RANGES = [100, 200, 300, 400, 500, 600];
@@ -286,11 +289,128 @@ for (let i = 0; i < RANGES.length; i++) {
   console.log(`${pad(RANGES[i], 4)}m |        ${pad(fmt(fullRows[i].z * 100, 2), 7)}         | ${pad(fmt((fullRows[i].y - simGame.rows[i].y) * 100, 2), 7)}`);
 }
 
+// ---------------------------------------------------------------------------
+// 6) 적 소총탄 7.62×39: 제조사 공개 탄도표 직접 비교(v0 738 m/s, G7 0.149)
+// ---------------------------------------------------------------------------
+const ammo762 = AMMO['762x39_ps'];
+const rifle762 = WEAPONS.rifle762;
+if (Math.abs(ammo762.bc - SB_762x39.bcG7) > 1e-9) {
+  failures++;
+  fails.push(`ammo762.bc(${ammo762.bc}) != 공개 G7 BC ${SB_762x39.bcG7}`);
+}
+if (Math.abs(rifle762.muzzleVelocity - AKM_MUZZLE_VELOCITY) > 1e-9) {
+  failures++;
+  fails.push(`rifle762.muzzleVelocity(${rifle762.muzzleVelocity}) != 제원 ${AKM_MUZZLE_VELOCITY}`);
+}
+const m762 = new BallisticModel({ dragModel: ammo762.dragModel, bc: ammo762.bc });
+const R762 = [100, 200, 300, 400, 500, 600];
+const sbX = SB_762x39.rows.map((r) => r[0]);
+const sbV = SB_762x39.rows.map((r) => r[1]);
+const sbVel = (x) => {
+  let i = 0;
+  while (i < sbX.length - 2 && x > sbX[i + 1]) i++;
+  const k = Math.log(sbV[i + 1] / sbV[i]) / (sbX[i + 1] - sbX[i]);
+  return sbV[i] * Math.exp(k * (x - sbX[i]));
+};
+const sbTof = (x, step = 0.05) => {
+  let t = 0;
+  for (let q = 0; q < x; q += step) {
+    const h = Math.min(step, x - q);
+    t += (h / 6) * (1 / sbVel(q) + 4 / sbVel(q + h / 2) + 1 / sbVel(q + h));
+  }
+  return t;
+};
+console.log(`\n=== [6] 적 소총탄 공개 탄도표 직접 비교: ${SB_762x39.source}, v0 ${SB_762x39.v0} m/s, G7 ${ammo762.bc} ===`);
+console.log(`    출처: ${SB_762x39.url}`);
+{
+  const el = solveZeroElevation(m762, { muzzleVelocity: SB_762x39.v0, sightHeight: 0.055, zeroRange: 100 });
+  const rows = computeTrajectory(m762, { muzzleVelocity: SB_762x39.v0, elevation: el, sightHeight: 0.055, ranges: [100, 200, 300], spin: false });
+  console.log(' 거리 |  속도 sim  공개   오차 | 비행시간 sim  공개(속도 곡선 적분)  오차');
+  for (const r of rows) {
+    const ref = sbVel(r.range);
+    const cv = check(`[6] ${r.range}m 속도`, r.v, ref);
+    const ct = check(`[6] ${r.range}m 비행시간`, r.t, sbTof(r.range));
+    console.log(`${pad(r.range, 4)}m | ${pad(r.v.toFixed(0), 5)} ${pad(ref.toFixed(0), 5)} ${pct(cv.rel)} |  ${r.t.toFixed(3)}s  ${sbTof(r.range).toFixed(3)}s ${pct(ct.rel)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7) 적 소총(715 m/s) 사거리표 + 음속 아래로 떨어지는 거리('딱'이 없어지는 거리)
+// ---------------------------------------------------------------------------
+{
+  const MV7 = rifle762.muzzleVelocity;
+  // 공개 표(738)를 715 m/s 지점부터 이동(자율계)한 기준: 738 → 715가 되는 거리 x0
+  let lo7 = 0;
+  let hi7 = 100;
+  for (let i = 0; i < 60; i++) {
+    const m = (lo7 + hi7) / 2;
+    if (sbVel(m) > MV7) lo7 = m;
+    else hi7 = m;
+  }
+  const x07 = (lo7 + hi7) / 2;
+  const el = solveZeroElevation(m762, { muzzleVelocity: MV7, sightHeight: rifle762.sightHeight, zeroRange: rifle762.battleZero });
+  const rows = computeTrajectory(m762, { muzzleVelocity: MV7, elevation: el, sightHeight: rifle762.sightHeight, ranges: R762, spin: false });
+  const wind = computeTrajectory(m762, { muzzleVelocity: MV7, elevation: el, sightHeight: rifle762.sightHeight, ranges: R762, spin: false, wind: windLeft });
+  console.log(`\n=== [7] 적 소총 사거리표: ${rifle762.name}, ${ammo762.name}, 초속 ${MV7} m/s, 전투 영점 ${rifle762.battleZero} m ===`);
+  console.log(`    공개 표 비교 구간(300 m까지)은 [E] 표를 x0 = ${x07.toFixed(1)} m 이동한 기준(초속 ${MV7} m/s 지점부터)`);
+  console.log(' 거리 | 탄착(cm, 조준선) | 비행시간 | 속도 sim  기준  오차 | 에너지(J) | 횡풍 5 m/s 편류(cm) | 초음속');
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let refTxt = '   -    ';
+    if (r.range + x07 <= 300) {
+      const ref = sbVel(r.range + x07);
+      const cv = check(`[7] ${r.range}m 속도`, r.v, ref);
+      refTxt = `${pad(ref.toFixed(0), 4)} ${pct(cv.rel)}`;
+    }
+    const e = 0.5 * ammo762.mass * r.v * r.v;
+    console.log(`${pad(r.range, 4)}m |      ${pad(fmt(r.y * 100), 7)}     |  ${r.t.toFixed(3)}s | ${pad(r.v.toFixed(0), 4)} ${refTxt} |  ${pad(e.toFixed(0), 6)}   |        ${pad(fmt(wind[i].z * 100), 6)}       |  ${isSupersonic(r.v) ? '예' : '아니오'}`);
+  }
+  // 음속 아래로 떨어지는 거리
+  let tLo = 100;
+  let tHi = 900;
+  for (let i = 0; i < 40; i++) {
+    const m = (tLo + tHi) / 2;
+    const v = computeTrajectory(m762, { muzzleVelocity: MV7, elevation: el, sightHeight: rifle762.sightHeight, ranges: [m], spin: false })[0].v;
+    if (isSupersonic(v)) tLo = m;
+    else tHi = m;
+  }
+  const transonic = (tLo + tHi) / 2;
+  console.log(`  음속(${ATMOSPHERE.speedOfSoundBallistic.toFixed(1)} m/s) 아래로 떨어지는 거리: ${transonic.toFixed(0)} m — 이보다 먼 곳을 지나는 탄은 '딱' 소리가 없다`);
+
+  // 게임 탄 시스템(BulletSystem)으로 실제 확인: 청자 옆 3 m를 지나는 탄의 'bullet:flyby' 초음속 판정
+  const fakeWorld = {
+    terrain: { heightAt: () => -1000, normalAt: (x, z, o = [0, 1, 0]) => o, surfaceAt: () => 'stubble' },
+    hash: { query: (a, b, c, d, out) => ((out.length = 0), out) },
+    wind: { sample: (x, y, z, t, out) => ((out.x = out.y = out.z = 0), 0) },
+  };
+  console.log('  게임 탄 시스템으로 확인(청자 옆 3 m 통과):');
+  const probes = [100, 300, Math.round(transonic - 30), Math.round(transonic + 30), 600];
+  for (const D of probes) {
+    const ev = new EventBus();
+    const bs = new BulletSystem(fakeWorld, ev);
+    bs.recordTrails = false;
+    let got = null;
+    ev.on('bullet:flyby', (f) => (got = f));
+    bs.listener = () => ({ x: D, y: 1.5, z: 3 });
+    // 거리 D에서 탄 높이가 청자 높이 근처가 되도록 앙각
+    const elD = solveZeroElevation(m762, { muzzleVelocity: MV7, sightHeight: 0, zeroRange: D });
+    bs.fire({ origin: { x: 0, y: 1.5, z: 0 }, dir: { x: Math.cos(elD), y: Math.sin(elD), z: 0 }, speed: MV7, ammo: ammo762, shooter: 'e1', spinSg: 1.6 });
+    for (let k = 0; k < 4000 && !got; k++) bs.update(0.001, k * 0.001);
+    const expect = D < transonic;
+    const ok = got && got.supersonic === expect;
+    if (!ok) {
+      failures++;
+      fails.push(`[7] ${D} m 통과 탄 초음속 판정 ${got ? got.supersonic : '없음'}, 기대 ${expect}`);
+    }
+    console.log(`    ${pad(D, 4)} m: 속도 ${got ? got.speed.toFixed(0) : '-'} m/s → ${got ? (got.supersonic ? "'딱'(초음속)" : "'휙'(아음속)") : '통과 안 함'}  ${ok ? '맞음' : '틀림'}`);
+  }
+}
+
 console.log('');
 if (failures > 0) {
   console.log(`실패 ${failures}건:`);
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 } else {
-  console.log('통과: 모든 항목이 공개 자료 기준 오차 10% 이내.');
+  console.log('통과: 모든 항목이 공개 자료 기준 오차 10% 이내(5.56×45, 7.62×39).');
 }

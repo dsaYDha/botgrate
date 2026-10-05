@@ -3,6 +3,36 @@
 // 무기 좌표계(W): 원점 = 개머리판 끝(어깨 견착점, 총열 축 연장선 위)
 //   +x 오른쪽, +y 위, -z 총구 방향(Three.js 관례). 단위 m.
 
+// 사람(사수)의 조준 흔들림 — 자세별. 플레이어와 적이 같은 표를 쓴다(적은 숙련도 배율만 다름).
+// 설명은 아래 carbine556.sway 주석.
+export const HUMAN_SWAY = {
+  stances: {
+    stand: { hold: 3.25, rested: 1.45, corr: 0.7, breath: 3.2, pulse: 0.35, tremor: 0.25, fatigueRate: 0.04 },
+    crouch: { hold: 1.55, rested: 0.88, corr: 0.9, breath: 2.0, pulse: 0.3, tremor: 0.15, fatigueRate: 0.025 },
+    prone: { hold: 0.82, rested: 0.4, corr: 1.3, breath: 1.2, pulse: 0.28, tremor: 0.08, fatigueRate: 0 },
+  },
+  restedBreath: 0.55, // 거치하면 호흡이 총을 덜 움직인다
+  fatigueOnset: 10, // s
+  fatigueMax: 1.0, // 최대 +100 %
+  fatigueRecover: 1.5, // 조준을 풀거나 거치하면 누적 시간이 초당 1.5 s씩 줄어듦
+  exertion: 1.75, // 심박 상승(0~1)에 따른 배수 1 + 1.75·ex → 10 s 질주 직후(ex≈0.7) 약 2.2배, 최대 2.75배
+  moving: 9, // 조준하고 걸을 때(1.5 m/s) 걸음 흔들림 진폭(MOA)
+  notShouldered: 2.2, // 비조준(견착만) 시 배수
+  holdBreath: {
+    stableTime: 5.0, // 이 시간까지 안정
+    maxTime: 11.0, // 이후 강제로 숨을 내쉼
+    exertionCut: 0.55, // 숨이 찰수록 참을 수 있는 시간이 줄어듦(질주 직후 약 60 %)
+    breathScale: 0.08, // 숨 참는 동안 남는 호흡 흔들림(가슴 움직임만 멈춘다)
+    wanderOvertime: 1.6, // 한계 시간에 이르면 표류 배수(숨 참기는 표류를 없애지 못한다)
+    overtimeTremor: 0.6, // 안정 시간 초과 후 떨림 증가율(MOA/s)
+    recovery: 4.0, // 숨 참기 후 거친 호흡 지속(s)
+  },
+  // 급한 격발: 이전 발 뒤 hasteWindow 안에 방아쇠를 당기면 격발 때 총이 흔들림(침착하면 0)
+  trigger: { hasteWindow: 0.45, jerk: { stand: 2.2, crouch: 1.4, prone: 0.9 }, restedScale: 0.6, biasLeft: 0.35, biasLow: 0.5 },
+  // 눈 위치 어긋남(m, 광학 아이박스 6 mm 기준): 조준 직후·자세 전환·이동·반동·숨 가쁨
+  eye: { settleStart: 0.009, settle: 0.32, settleProne: 0.22, move: 0.004, exertion: 0.0018, recoil: 0.007 },
+};
+
 export const WEAPONS = {
   carbine556: {
     id: 'carbine556',
@@ -165,33 +195,7 @@ export const WEAPONS = {
     // corr: 표류 상관 시간(s) — 서서는 빨리, 엎드려는 천천히 떠돈다.
     // breath: 숨 쉴 때 상하 진폭(MOA, 날숨 끝에 잠깐 멈춤). pulse: 맥박 튐 진폭. tremor: 미세 떨림.
     // fatigueRate: 거치 없이 fatigueOnset(10 s) 넘게 조준하면 초당 흔들림 증가율(팔 피로).
-    sway: {
-      stances: {
-        stand: { hold: 3.25, rested: 1.45, corr: 0.7, breath: 3.2, pulse: 0.35, tremor: 0.25, fatigueRate: 0.04 },
-        crouch: { hold: 1.55, rested: 0.88, corr: 0.9, breath: 2.0, pulse: 0.3, tremor: 0.15, fatigueRate: 0.025 },
-        prone: { hold: 0.82, rested: 0.4, corr: 1.3, breath: 1.2, pulse: 0.28, tremor: 0.08, fatigueRate: 0 },
-      },
-      restedBreath: 0.55, // 거치하면 호흡이 총을 덜 움직인다
-      fatigueOnset: 10, // s
-      fatigueMax: 1.0, // 최대 +100 %
-      fatigueRecover: 1.5, // 조준을 풀거나 거치하면 누적 시간이 초당 1.5 s씩 줄어듦
-      exertion: 1.75, // 심박 상승(0~1)에 따른 배수 1 + 1.75·ex → 10 s 질주 직후(ex≈0.7) 약 2.2배, 최대 2.75배
-      moving: 9, // 조준하고 걸을 때(1.5 m/s) 걸음 흔들림 진폭(MOA)
-      notShouldered: 2.2, // 비조준(견착만) 시 배수
-      holdBreath: {
-        stableTime: 5.0, // 이 시간까지 안정
-        maxTime: 11.0, // 이후 강제로 숨을 내쉼
-        exertionCut: 0.55, // 숨이 찰수록 참을 수 있는 시간이 줄어듦(질주 직후 약 60 %)
-        breathScale: 0.08, // 숨 참는 동안 남는 호흡 흔들림(가슴 움직임만 멈춘다)
-        wanderOvertime: 1.6, // 한계 시간에 이르면 표류 배수(숨 참기는 표류를 없애지 못한다)
-        overtimeTremor: 0.6, // 안정 시간 초과 후 떨림 증가율(MOA/s)
-        recovery: 4.0, // 숨 참기 후 거친 호흡 지속(s)
-      },
-      // 급한 격발: 이전 발 뒤 hasteWindow 안에 방아쇠를 당기면 격발 때 총이 흔들림(침착하면 0)
-      trigger: { hasteWindow: 0.45, jerk: { stand: 2.2, crouch: 1.4, prone: 0.9 }, restedScale: 0.6, biasLeft: 0.35, biasLow: 0.5 },
-      // 눈 위치 어긋남(m, 광학 아이박스 6 mm 기준): 조준 직후·자세 전환·이동·반동·숨 가쁨
-      eye: { settleStart: 0.009, settle: 0.32, settleProne: 0.22, move: 0.004, exertion: 0.0018, recoil: 0.007 },
-    },
+    sway: HUMAN_SWAY,
 
     // --- 총열 과열: 평균 온도 상승(°C)과 냉각, 분산·탄착점 변화 ---
     // 발당 약 2.6 °C(장약 에너지의 일부가 총열로, 14.5인치 총열 질량 기준 추정), 냉각 시정수 10분.
@@ -202,6 +206,47 @@ export const WEAPONS = {
     muzzleFlash: { size: 0.09, duration: 0.03 },
     ejection: { speed: 3.6, spread: 0.35, direction: [0.85, 0.25, 0.2] }, // 무기 좌표계 방향
   },
+
+  // 적 소총: 7.62×39mm 돌격소총(범용 이름). 사람 흔들림 표는 플레이어와 같다(병사마다 숙련도 배율 0.8~1.5).
+  rifle762: {
+    id: 'rifle762',
+    name: '7.62mm 돌격소총',
+    ammoId: '762x39_ps',
+    barrelLength: 0.415, // 16.3 in
+    muzzleVelocity: 715, // m/s (AKM 제원 715 m/s, 7.62×39 보통탄 710~725)
+    twistInches: 9.45, // 1:240 mm 우선회
+    rightHandTwist: true,
+    rateOfFire: 600, // 발/분
+    fireModes: ['semi', 'auto'],
+    magazineCapacity: 30,
+    magazinesCarried: 6, // 삽입 1 + 예비 5(180발)
+    mass: 3.3,
+    // 적 총 모델(HumanModel.buildRifle) 좌표: +z 총구 방향, 원점 = 권총손잡이 위
+    modelMuzzle: [0, 0.045, 0.64],
+    sightHeight: 0.055,
+    battleZero: 300, // 가늠자 'П'(전투 영점): 300 m 안은 표적 아래쪽을 겨누면 맞도록
+    handling: {
+      raise: 0.45, // 낮춘 총을 들어 조준
+      // 재장전(s): 노리쇠 멈춤이 없어 탄을 다 쓰면 장전 손잡이를 당겨야 한다(+0.6 s)
+      reload: 3.0,
+      reloadEmptyExtra: 0.6,
+      proneMultiplier: 1.35,
+    },
+    recoil: {
+      gasVelocityFactor: 1.75,
+      // 소염·제퇴기(경사형 총구 브레이크)가 들림을 줄인다. 연발하면 위·오른쪽으로 끌려 올라간다.
+      stances: {
+        stand: { leverArm: 0.05, inertia: 0.55, freq: 3.0, damping: 0.7, residual: 0.09, yawRatio: 0.45, yawBias: 0.2 },
+        crouch: { leverArm: 0.042, inertia: 0.62, freq: 3.4, damping: 0.74, residual: 0.07, yawRatio: 0.38, yawBias: 0.16 },
+        prone: { leverArm: 0.03, inertia: 0.78, freq: 4.2, damping: 0.8, residual: 0.04, yawRatio: 0.3, yawBias: 0.1 },
+      },
+      modelKick: 0.03,
+      cameraShake: 0,
+    },
+    sway: HUMAN_SWAY,
+    barrel: { ambient: 15, heatPerShot: 2.4, coolTau: 600, dispersionFrom: 50, dispersionPerDeg: 0.004, dispersionMax: 0.6, shiftPerDeg: 0.005 },
+  },
 };
 
 export const DEFAULT_WEAPON = 'carbine556';
+export const ENEMY_WEAPON = 'rifle762';

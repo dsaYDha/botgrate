@@ -22,4 +22,23 @@ export const AMMO = {
     penetrationRefVelocity: 900,
     tracer: false,
   },
+  // 적 소총탄: 7.62×39mm 강철 심 보통탄(소련 57-N-231 계열, 7.9 g)
+  '762x39_ps': {
+    id: '762x39_ps',
+    name: '7.62×39mm 7.9 g 보통탄(강철 심)',
+    diameter: 0.00791,
+    mass: 0.0079, // 122 gr
+    massGrains: 122,
+    length: 0.0267,
+    dragModel: 'G7',
+    bc: 0.149, // G7, Sellier & Bellot 공개값(8.0 g FMJ: G1 0.289 / G7 0.149) — 같은 모양의 보트테일 탄
+    powderMass: 0.0016, // 장약 약 1.6 g
+    // 실탄 산포(총+탄) 축별 표준편차 1.6 MOA → 5발 군집 평균 약 4.9 MOA.
+    // 근거: 소련 AKM 납품 기준(100 m에서 4발이 지름 15 cm 원 안 ≈ 최대 5 MOA), 민수용 AK + 강철 탄피 탄 4~6 MOA(5발)
+    dispersionSigmaMoa: 1.6,
+    muzzleVelocitySD: 8,
+    // 관통: 5.56 기준 재질 표를 쓰되, 무겁고 굵은 강철 심 탄이라 715 m/s에서 나무 약 1.2배, 흙 약 1.1배(추정)
+    penetrationRefVelocity: 640,
+    tracer: false,
+  },
 };

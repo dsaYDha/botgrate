@@ -9,6 +9,22 @@ import { rng } from '../core/Random.js';
 // 엎드려쏴 총구 먼지가 이는 정도(지면 종류별): 마른 맨흙·흙길이 가장 크고, 풀밭·숲 바닥은 작다
 const MUZZLE_DUST = { plowed: 1.2, road: 1.25, stubble: 1.0, sunflower: 0.7, forest: 0.55, fallow: 0.45, grass: 0.3 };
 
+/**
+ * 엎드려쏴 총구 먼지 세기(0~): 총구가 땅에 가까울수록, 마른 맨흙일수록 크다. 적의 시각(먼지가 보임)도 같은 값을 쓴다.
+ * @returns {{k:number, surf:string, x:number, y:number, z:number}|null}
+ */
+export function proneMuzzleDust(world, m, d) {
+  const gx = m.x + d.x * 0.35;
+  const gz = m.z + d.z * 0.35;
+  const gy = world.terrain.heightAt(gx, gz);
+  const hgt = m.y - gy;
+  if (hgt >= 0.55) return null;
+  const surf = world.terrain.surfaceAt(gx, gz);
+  const dusty = MUZZLE_DUST[surf] ?? 0.5;
+  const k = dusty * (1 - hgt / 0.55);
+  return k > 0.04 ? { k, surf, x: gx, y: gy, z: gz } : null;
+}
+
 const DUST_COLORS = {
   stubble: [0.63, 0.57, 0.45],
   plowed: [0.44, 0.37, 0.29],
@@ -334,7 +350,6 @@ export class Effects {
   }
 
   onShot(e) {
-    if (e.shooter !== 'player') return;
     const P = this.particles;
     const m = e.position;
     const d = e.direction;
@@ -361,18 +376,11 @@ export class Effects {
     // 엎드려쏴: 총구 폭풍(소염기는 옆·위로 가스를 뿜는다)이 마른 흙·짚 부스러기를 일으켜 잠깐 시야를 가린다.
     // 총구가 땅에 가까울수록, 마른 맨흙일수록 크고, 바람에 흘러 흩어진다.
     if (e.stance === 'prone') {
-      const gx = m.x + d.x * 0.35;
-      const gz = m.z + d.z * 0.35;
-      const gy = this.world.terrain.heightAt(gx, gz);
-      const hgt = m.y - gy;
-      if (hgt < 0.55) {
-        const surf = this.world.terrain.surfaceAt(gx, gz);
-        const dusty = MUZZLE_DUST[surf] ?? 0.5;
-        const k = dusty * (1 - hgt / 0.55);
-        if (k > 0.04) this._muzzleDust(gx, gy, gz, DUST_COLORS[surf] || DUST_COLORS.stubble, k, d);
-      }
+      const pd = proneMuzzleDust(this.world, m, d);
+      if (pd) this._muzzleDust(pd.x, pd.y, pd.z, DUST_COLORS[pd.surf] || DUST_COLORS.stubble, pd.k, d);
     }
-    // 탄피 배출
+    // 탄피 배출(플레이어 총만 — 적 탄피는 생략)
+    if (!e.ejectDir) return;
     const ej = e.ejectDir;
     const speed = 3.6 * (0.85 + rng.next() * 0.3);
     const vel = new THREE.Vector3(ej.x, ej.y, ej.z).normalize().multiplyScalar(speed);
