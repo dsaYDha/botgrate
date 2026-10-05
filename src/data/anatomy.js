@@ -77,3 +77,21 @@ export const WOUND_TIMING = {
   crawlDuration: [15, 45],
   armDropChance: 0.65,
 };
+
+// 플레이어 부상(적과 같은 부위 판정·같은 부상 범주). 체력바 없이 몸 상태로만 드러난다.
+//   머리·목·흉부 중앙·척추: 즉사
+//   폐: 시야가 빠르게 어두워지고 3~10 s 안에 쓰러짐(전투 불능)
+//   복부·골반: 일어설 수 없음(엎드려 기며 사격), 지혈 불가 출혈로 1~3분 뒤 전투 불능
+//   다리: 일어설 수 없음(엎드려 기기·사격만), 지혈대로 출혈을 멈출 수 있음(다리는 계속 못 씀)
+//   팔: 흔들림 3배, 재장전 2.5배 느림, 지혈대로 출혈 멈춤
+// 출혈: 남은 혈액 비율(1 → 0.6이면 전투 불능, 약 40 % 손실 = 4등급 출혈). 부위별로 지혈하지 않으면 bleedOut 초 안에 0.6에 닿는 속도.
+export const PLAYER_WOUNDS = {
+  lungCollapse: [3, 10],
+  abdomenIncap: [60, 180],
+  bleedOut: { thigh: [120, 300], shin: [300, 600], foot: [480, 900], armUpper: [180, 480], armLower: [420, 900], hand: [600, 1200] },
+  incapBlood: 0.6,
+  tourniquet: [20, 32], // s(팔을 다쳤으면 한 손이라 +8 s)
+  tourniquetOneHand: 8,
+  armSway: 3.0,
+  armReload: 2.5,
+};

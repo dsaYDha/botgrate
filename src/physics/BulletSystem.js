@@ -452,6 +452,7 @@ export class BulletSystem {
       shooter: b.shooter,
       distance: Math.hypot(px - b.ox, py - b.oy, pz - b.oz),
       bulletId: b.id,
+      bullet: b,
       time: this.time,
     };
 

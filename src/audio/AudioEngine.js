@@ -1,6 +1,9 @@
 // Web Audio 엔진: 합성 음원 재생, 음속 지연(343 m/s), 거리 감쇠·공기 흡수(고음 감쇠),
+// 숲띠 통과 감쇠(띠 안을 지난 길이만큼 작고 둔하게), 바람(풍하측으로 잘 들림), HRTF 공간화,
 // 환경 잔향(들판: 짧고 성김 + 숲띠 메아리, 숲띠 안: 줄기 반사로 길게), 배경음(바람·잎·풀벌레).
-// 같은 전파 경로(propagate)에 2단계의 적 총성·초음속 탄 스침 소리를 얹을 수 있다.
+// 적 총성: 사수 위치에서 거리/343 s 뒤 + 둘레 숲띠 가장자리에서 돌아오는 메아리.
+// 탄 스침: 초음속이면 '딱' — 사수 쪽이 아니라 마하 원뿔이 나온 탄 경로 위 점에서, 스친 거리가 가까울수록 날카롭고 크게.
+//         아음속이면 '휙'. 그래서 '딱'만으로는 사수 방향을 알 수 없고, 뒤이은 '쾅'과의 시간차로 거리를 가늠한다.
 
 import * as THREE from 'three';
 import { buildSoundBank } from './SoundBank.js';
@@ -148,6 +151,24 @@ export class AudioEngine {
     return arr[Math.floor(rng.next() * arr.length)];
   }
 
+  /** 두 점 사이 2차원 경로가 숲띠(수관·덤불 지도)를 지나는 길이(m) */
+  _beltPath(ax, az, bx, bz) {
+    const c = this.world.canopy;
+    if (!c) return 0;
+    const L = Math.hypot(bx - ax, bz - az);
+    const n = Math.min(400, Math.ceil(L / 2));
+    let len = 0;
+    for (let k = 1; k < n; k++) {
+      const t = k / n;
+      const i = Math.floor((ax + (bx - ax) * t + c.half) / c.res);
+      const j = Math.floor((az + (bz - az) * t + c.half) / c.res);
+      if (i < 0 || j < 0 || i >= c.N || j >= c.N) continue;
+      const q = (j * c.N + i) * 4;
+      if (c.data[q] > 90 || c.data[q + 1] > 120) len += L / n;
+    }
+    return len;
+  }
+
   /**
    * 위치 있는 소리 재생. 음속 지연·거리 감쇠·공기 흡수·바람 방향 효과.
    * @param {AudioBuffer} buffer
@@ -167,17 +188,22 @@ export class AudioEngine {
     const w = this.world.wind;
     const along = d > 1 ? (w.dirX * (-dx / d) + w.dirZ * (-dz / d)) : 0;
     gain *= 1 + Math.max(-0.5, Math.min(0.35, along * (w.speed / 8) * Math.min(1, d / 250) * 0.45));
+    // 숲띠를 지나면: 띠 안 1 m당 약 0.12 dB 감쇠, 고음이 더 깎임
+    let beltLen = 0;
+    if (o.belts !== false && d > 25) beltLen = this._beltPath(this.listener.x, this.listener.z, pos.x, pos.z);
+    if (beltLen > 0) gain *= Math.pow(10, (-0.12 * beltLen) / 20);
     if (gain < 0.0004) return;
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.playbackRate.value = o.rate || 1;
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = Math.max(900, Math.min(20000, 20000 * Math.pow(40 / Math.max(40, d), 0.75)));
+    // 공기 흡수(거리) + 숲띠 통과
+    lp.frequency.value = Math.max(500, Math.min(20000, 20000 * Math.pow(40 / Math.max(40, d), 0.75) * Math.exp(-beltLen / 45) * (o.lowpass || 1)));
     const g = ctx.createGain();
     g.gain.value = gain;
     const pan = ctx.createPanner();
-    pan.panningModel = 'equalpower';
+    pan.panningModel = o.hrtf === false ? 'equalpower' : 'HRTF';
     pan.distanceModel = 'linear';
     pan.refDistance = 1;
     pan.maxDistance = 1e6;
@@ -196,7 +222,7 @@ export class AudioEngine {
       pan.connect(sg).connect(this.revSend);
     }
     const delay = (o.noDelay ? 0 : d / C) + (o.delay || 0);
-    src.start(ctx.currentTime + delay);
+    src.start(ctx.currentTime + Math.max(0, delay));
     this.voices++;
     src.onended = () => {
       this.voices--;
@@ -235,7 +261,10 @@ export class AudioEngine {
     ev.on('shot', (e) => this.onShot(e));
     ev.on('bullet:impact', (e) => this.onImpact(e));
     ev.on('bullet:foliage', (e) => {
-      if (this.ready && rng.next() < 0.5) this.propagate(this._pick(this.bank.impact.leaves), e, { gain: 0.5, ref: 3, reverb: 0.1 });
+      if (!this.ready) return;
+      // 잎을 찢는 소리: 가까이(25 m 안) 날아든 남의 탄은 언제나, 그 밖은 반쯤
+      const near = e.shooter !== 'player' && Math.hypot(e.x - this.listener.x, e.z - this.listener.z) < 25;
+      if (near || rng.next() < 0.5) this.propagate(this._pick(this.bank.impact.leaves), e, { gain: near ? 1.0 : 0.5, ref: 3, reverb: 0.1 });
     });
     ev.on('weapon:sound', (e) => this.onWeaponSound(e));
     // 거치: 총을 통나무·흙·줄기에 걸칠 때 작게 스치는 소리
@@ -256,36 +285,73 @@ export class AudioEngine {
       else if (e.type === 'exhale') this.playLocal(this.bank.breath.exhale, 0.16);
       else if (e.type === 'gasp') this.playLocal(this.bank.breath.gasp, 0.3);
     });
-    // 2단계: 남의 초음속 탄이 스치면 크랙(마하 원뿔은 총성보다 먼저 도착)
-    ev.on('bullet:flyby', (e) => {
-      if (e.supersonic) this.playCrack(e, e.distance);
+    // 남의 탄이 스침: 초음속 '딱'(마하 원뿔 방출점에서), 아음속 '휙'
+    ev.on('bullet:flyby', (e) => this.playFlyby(e));
+    ev.on('enemy:shout', (e) => {
+      if (!this.ready) return;
+      const bank = this.bank.shout[e.kind] || this.bank.shout.contact;
+      const loud = e.kind === 'suspicious' ? 1.2 : 9;
+      this.propagate(this._pick(bank), e.position, { gain: loud, ref: 1, reverb: 0.5, delay: e.delay || 0, rate: 0.95 + rng.next() * 0.1 });
+    });
+    ev.on('enemy:handling', (e) => {
+      if (!this.ready) return;
+      const m = this.bank.mech[e.type];
+      if (m) this.propagate(this._pick(m), e.enemy.chestWorld, { gain: 1.0, ref: 1, reverb: 0.15 });
+    });
+    ev.on('enemy:reload', (e) => {
+      if (!this.ready) return;
+      this.propagate(this._pick(this.bank.mech.magRelease), e.enemy.chestWorld, { gain: 0.8, ref: 1, reverb: 0.15 });
+    });
+    ev.on('player:hit', () => {
+      if (!this.ready) return;
+      this.playLocal(this._pick(this.bank.impact.body), 0.9, { rate: 0.8 });
+      this.playLocal(this.bank.breath.gasp, 0.45, { rate: 0.85 });
+    });
+    ev.on('player:tourniquet', (e) => {
+      if (!this.ready) return;
+      if (e.phase === 'start') this.playLocal(this.bank.tq.rip, 0.35);
+      else if (e.phase === 'turn' || e.phase === 'done') this.playLocal(this.bank.tq.click, 0.3, { rate: 0.9 + rng.next() * 0.2 });
     });
     ev.on('enemy:fallSound', (e) => this.propagate(this._pick(this.bank.impact.fall), e.position, { gain: 2.2 * (e.intensity || 1), ref: 2, reverb: 0.25 }));
     ev.on('enemy:rifleDrop', (e) => this.propagate(this._pick(this.bank.impact.rifleDrop), e.position, { gain: 1.4, ref: 2, reverb: 0.2 }));
   }
 
-  /** 총성: 근거리 원음 + 환경 잔향 + 주변 숲띠에서 돌아오는 메아리 */
+  /** 총성: 근거리 원음 + 환경 잔향 + 숲띠 가장자리에서 돌아오는 메아리 */
   onShot(e) {
     if (!this.ready) return;
     const isPlayer = e.shooter === 'player';
     const buffer = this._pick(this.bank.gunshot);
+    const p = e.position;
     if (isPlayer) {
       this.playLocal(buffer, 0.95, { reverb: 0.9, rate: 0.97 + rng.next() * 0.06 });
     } else {
-      // 2단계: 적 총성 — 거리 지연 포함
-      this.propagate(buffer, e.position, { gain: 60, ref: 1, reverb: 0.8 });
+      // 적 총성(7.62×39는 조금 낮고 굵게) — 거리/343 s 뒤, 숲띠를 지나면 작고 둔하게
+      this.propagate(buffer, p, { gain: 60, ref: 1, reverb: 0.8, rate: 0.9 + rng.next() * 0.05 });
     }
-    // 숲띠 메아리: 들판에서 총성이 띠에 맞고 되돌아오는 소리(왕복 거리 / 음속)
-    const p = e.position;
+    // 메아리: 숲띠 가장자리(직선 가장자리를 거울로 본 상(像) 음원 → 청자)
+    const L = this.listener;
     for (const b of this.world.layout.belts) {
-      const { u, v } = b.toLocal(p.x, p.z);
-      if (u < b.from - 50 || u > b.to + 50) continue;
-      const dEdge = Math.abs(v) - b.half;
-      if (dEdge < 8 || dEdge > 650) continue;
-      const refl = b.toWorld(Math.max(b.from, Math.min(b.to, u)), Math.sign(v) * b.half);
-      const pos = { x: refl.x, y: p.y + 4, z: refl.z };
-      const g = 0.9 * Math.min(1, 120 / dEdge);
-      this.propagate(buffer, pos, { gain: g * 2.5, ref: 1, reverb: 0.6, delay: dEdge / C, rate: 0.92 });
+      for (const sgn of [-1, 1]) {
+        const edge = sgn * b.half;
+        const sl = b.toLocal(p.x, p.z);
+        const ll = b.toLocal(L.x, L.z);
+        // 음원·청자가 이 가장자리의 바깥 같은 쪽에 있어야 반사
+        if ((sl.v - edge) * sgn <= 4 || (ll.v - edge) * sgn <= 0) continue;
+        const sv = sl.v - edge;
+        const lv = ll.v - edge;
+        // 반사점(가장자리 위): 거울상 음원과 청자를 잇는 선이 가장자리와 만나는 곳
+        const t = sv / (sv + lv);
+        const u = sl.u + (ll.u - sl.u) * t;
+        if (u < b.from || u > b.to || b.inGap(u)) continue;
+        const R = b.toWorld(u, edge);
+        const d1 = Math.hypot(R.x - p.x, R.z - p.z);
+        const d2 = Math.hypot(R.x - L.x, R.z - L.z);
+        const direct = Math.hypot(L.x - p.x, L.z - p.z);
+        if (d1 + d2 - direct < 15 || d1 + d2 > 1400) continue;
+        const pos = { x: R.x, y: p.y + 4, z: R.z };
+        const g = (isPlayer ? 2.3 : 60 * 0.3) * Math.min(1, 1 / Math.max(1, d1 / 40));
+        this.propagate(buffer, pos, { gain: g, ref: 1, reverb: 0.6, delay: d1 / C, rate: 0.9, lowpass: 0.5, belts: false });
+      }
     }
   }
 
@@ -335,10 +401,34 @@ export class AudioEngine {
     this.propagate(this._pick(this.bank.impact.rifleDrop), pos, { gain: 0.25, ref: 1, reverb: 0.1, rate: 1.5 });
   }
 
-  /** 2단계: 초음속 탄이 청자 근처를 지날 때 크랙(마하 원뿔 도달 시각에 맞춰) */
-  playCrack(point, distance) {
+  /**
+   * 탄 스침: 초음속이면 '딱'을 마하 원뿔 방출점(탄 경로 위, 최근접점보다 사수 쪽)에서, 충격파가 닿는 시각에.
+   * 세기는 과압 ∝ 거리^(−3/4), 가까울수록 N파가 짧아 날카롭다. 아음속이면 '휙'(가까울 때만).
+   */
+  playFlyby(e) {
     if (!this.ready) return;
-    this.propagate(this.bank.crack[0], point, { gain: Math.min(3, 8 / Math.max(1, distance)), ref: 1, reverb: 0.4 });
+    const r = Math.max(0.3, e.distance);
+    if (e.supersonic) {
+      const buf = r < 2 ? this.bank.crack.near : r < 10 ? this.bank.crack.mid : this.bank.crack.far;
+      const gain = Math.min(6, 9 * Math.pow(1 / r, 0.75));
+      this.propagate(buf, e.emit, { gain, ref: 1, reverb: 0.35, noDelay: true, delay: e.delay, belts: false });
+    } else if (r < 6) {
+      this.propagate(this.bank.whiz, e.emit, { gain: 1.4 / Math.max(0.5, r), ref: 1, reverb: 0.1, noDelay: true, delay: e.delay, rate: 0.9 + rng.next() * 0.2, belts: false });
+    }
+  }
+
+  /** 심장 박동: 다쳤거나 몹시 긴장(제압)했을 때, 심박에 맞춰 */
+  heartbeatTick(dt, heart, intensity) {
+    if (!this.ready || intensity <= 0.02) {
+      this._hbT = 0;
+      return;
+    }
+    this._hbT = (this._hbT || 0) + dt;
+    const period = 60 / Math.max(50, heart);
+    if (this._hbT >= period) {
+      this._hbT -= period;
+      this.playLocal(this.bank.heartbeat, 0.12 + 0.45 * Math.min(1, intensity), { rate: 0.95 + rng.next() * 0.05 });
+    }
   }
 
   /** 거친 호흡(질주 후): Game이 호흡 위상에 맞춰 호출 */

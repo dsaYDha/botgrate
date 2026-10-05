@@ -179,6 +179,7 @@ uniform float uRays;
 uniform sampler2D tAO;
 uniform float uAO;
 uniform vec2 uAOTexel;
+uniform vec4 uBody; // 몸 상태: 어두워짐, 채도 감소, 시야 가장자리 좁아짐(제압), 0
 varying vec2 vUv;
 
 float lumi(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -198,6 +199,13 @@ void main() {
   // 비네팅(아주 약하게: 렌즈가 아니라 눈의 주변 시야 정도)
   vec2 q = vUv - 0.5;
   c *= 1.0 - uVignette * dot(q, q) * 1.6;
+  // 몸 상태(절제): 제압되면 시야 가장자리가 살짝 좁아지고, 피를 잃으면 전체가 어두워지며 색이 빠진다
+  if (uBody.x + uBody.y + uBody.z > 0.001) {
+    float r = length(q * vec2(1.25, 1.0));
+    c *= 1.0 - uBody.z * smoothstep(0.28, 0.72, r);
+    c *= 1.0 - uBody.x * (0.55 + 0.45 * smoothstep(0.15, 0.7, r));
+    c = mix(c, vec3(lumi(c)), uBody.y);
+  }
   gl_FragColor = vec4(c, 1.0);
   #include <tonemapping_fragment>
   // 톤매핑 뒤(표시 선형): 채도·대비·분할 색조
@@ -290,7 +298,9 @@ export class Post {
       tAO: { value: null },
       uAO: { value: 0 },
       uAOTexel: { value: new THREE.Vector2() },
+      uBody: { value: new THREE.Vector4() },
     });
+    this.body = new THREE.Vector4(); // 바깥(PlayerHealth)에서 설정
     this.aoMat = mk(AO_FRAG, { tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uCam: { value: new THREE.Vector4() }, uRadius: { value: 0.6 } });
     this.blurMat = mk(BLUR_FRAG, { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } });
     this.mixMat = mk(MIX_FRAG, { tSrc: { value: null }, uAmount: { value: 0 } }, { transparent: true, blending: THREE.NormalBlending });
@@ -468,6 +478,7 @@ export class Post {
     fm.uWhite.value.copy(P.white);
     fm.uGrade.value.set(P.saturation, P.contrast, P.coolShadows, P.warmHighlights);
     fm.uVignette.value = P.vignette;
+    fm.uBody.value.copy(this.body);
     this._pass(this.finalMat, null);
     r.autoClear = autoClear;
   }

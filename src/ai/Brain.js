@@ -32,6 +32,7 @@ export const BEHAVIOR = {
   suppressGap: { slow: [6, 12], normal: [3.5, 7], rapid: [1.8, 3.5] },
   maxRange: 450, // 이보다 멀면 거의 쏘지 않음(조준 사격 유효 거리)
   suppressMaxErr: 70, // 이보다 오차가 크면 제압 사격도 안 함(탄 낭비)
+  returnFireMaxErr: 260, // 다만 우리가 맞고 있으면 이 오차까지는 짐작한 쪽으로 드문 응사
   ammoReserve: 2, // 예비 탄창이 이만큼 남으면 제압 사격을 아낀다
 };
 
@@ -470,7 +471,7 @@ export class Brain {
     const e = this.e;
     const K = e.knowledge;
     const sh = e.shooter;
-    if (!sh || !e.rifleHeld) return null;
+    if (!sh || !e.rifleHeld || K.downSeen) return null;
     if (K.visible && K.seenPoint) {
       const sp = K.seenPoint;
       const d = Math.hypot(sp.x - e.x, sp.z - e.z);
@@ -491,7 +492,10 @@ export class Brain {
       }
       return { mode: 'suppress', point: st.point, burst: st.burst };
     }
-    if (K.err > BEHAVIOR.suppressMaxErr) return null;
+    // 위치를 정확히 모르면 제압하지 않지만, 우리가 맞고 있는 중이면(20 s 안) 짐작하는 숲 가장자리 쪽으로 느리게 응사한다
+    const underFire = e.unit && this.ctx.time() - e.unit.lastUnderFire < 20;
+    const roughOk = underFire && K.err <= BEHAVIOR.returnFireMaxErr;
+    if (K.err > BEHAVIOR.suppressMaxErr && !roughOk) return null;
     if (sh.spare <= BEHAVIOR.ammoReserve && rng.next() < 0.7) return null;
     const d = Math.hypot(K.x - e.x, K.z - e.z);
     if (d > BEHAVIOR.maxRange * 1.2) return null;
@@ -499,7 +503,9 @@ export class Brain {
     // 제압: 오차 분포에서 한 점, 지면 위 0.3~1 m
     const q = K.sample(rng, 0.6);
     const gy = this.ctx.world.terrain.heightAt(q.x, q.z);
-    const burst = rng.int(BEHAVIOR.suppressBurst[0], BEHAVIOR.suppressBurst[1]);
+    const rough = K.err > BEHAVIOR.suppressMaxErr;
+    const burst = rough ? rng.int(1, 3) : rng.int(BEHAVIOR.suppressBurst[0], BEHAVIOR.suppressBurst[1]);
+    if (rough) this.nextSuppress += rng.range(4, 9); // 막연한 응사는 더 드물게
     this.supT = { point: { x: q.x, y: gy + rng.range(0.3, 1.0), z: q.z }, burst, shots0: sh.shots, until: this.time + 4 + burst * 0.2 };
     return { mode: 'suppress', point: this.supT.point, burst };
   }

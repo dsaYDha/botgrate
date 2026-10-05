@@ -15,7 +15,10 @@ export const KEYS = {
   magCheck: 'KeyT',
   switchSight: 'KeyV',
   reset: 'KeyP',
+  tourniquet: 'KeyH',
   debug: 'F3',
+  debugAI: 'F4',
+  god: 'F6', // 디버그 전용 무적(F3 화면이 켜져 있을 때만)
 };
 
 export class Input {
@@ -36,7 +39,7 @@ export class Input {
     if (this.forceLocked) this.locked = true;
     this.onLockChange = null;
     this._onKeyDown = (e) => {
-      if (e.code === 'F3' || e.code === 'Tab' || (this.locked && e.code === 'Space')) e.preventDefault();
+      if (e.code === 'F3' || e.code === 'F4' || e.code === 'F6' || e.code === 'Tab' || (this.locked && e.code === 'Space')) e.preventDefault();
       if (e.repeat) return;
       if (this.fallback && this.locked && e.code === 'Escape') {
         this._setFallbackLock(false);

@@ -17,6 +17,7 @@ import { AMMO } from '../src/data/ammo.js';
 import { MOVEMENT } from '../src/data/movement.js';
 import { BallisticModel, computeTrajectory, solveZeroElevation } from '../src/physics/ballistics.js';
 import { rng } from '../src/core/Random.js';
+import { Shooter, holdFor } from '../src/ai/Shooter.js';
 
 const W = WEAPONS[DEFAULT_WEAPON];
 const A = AMMO[W.ammoId];
@@ -139,6 +140,94 @@ for (const c of EXTRA) {
   console.log(`  ${c.name.padEnd(28)}  흔들림 ${r.d90.toFixed(1).padStart(5)} MOA   명중 ${pct(r.hits[2])}`);
 }
 
+// ---------------------------------------------------------------------------
+// 적 사수: 게임의 적 소총 코드(src/ai/Shooter.js)를 그대로 쓴다 — 같은 AimModel(같은 자세별 흔들림 표)
+// × 숙련도 배율, 총+탄 분산, 조준 시간 뒤 격발(멀면 숨 참기). 거리·바람·리드는 완벽하다고 둔다(rangeBias 1).
+const E_RANGES = RANGES;
+const W762 = WEAPONS.rifle762;
+const A762 = AMMO[W762.ammoId];
+const m762 = new BallisticModel({ dragModel: A762.dragModel, bc: A762.bc });
+const dydv762 = (() => {
+  const yv = (v) => E_RANGES.map((R) => {
+    const el = solveZeroElevation(m762, { muzzleVelocity: W762.muzzleVelocity, sightHeight: 0, zeroRange: R });
+    return computeTrajectory(m762, { muzzleVelocity: v, elevation: el, sightHeight: 0, ranges: [R], spin: false })[0].y;
+  });
+  const a = yv(W762.muzzleVelocity);
+  const b = yv(W762.muzzleVelocity + 10);
+  return a.map((y, i) => (b[i] - y) / 10);
+})();
+
+/** 적 한 발: 발사 방향과 이상적 방향(정확히 겨눈 방향)의 차이(rad)와 총구속도 편차 */
+function enemyShot(stance, R, skillSway, dispersionMoa, mvSD) {
+  const enemy = { x: 0, z: 0, y: 0, stance: stance === 'crouch' ? 'kneel' : stance, rifleHeld: true, clutch: null, muzzleWorld: (o) => ((o.x = 0), (o.y = 1.5), (o.z = 0), o) };
+  let fired = null;
+  const bullets = { fire: (o) => ((fired = o), { id: 1 }) };
+  const sh = new Shooter(enemy, { bullets, events: { emit() {} } }, { sway: skillSway, reaction: 1 });
+  sh.dispersionMoa = dispersionMoa;
+  sh.mvSD = mvSD;
+  sh.heart = H.rest + 4;
+  sh.wantRaise = true;
+  sh.setTarget({ x: 0, y: 1.5, z: -R, mode: 'aimed', rangeBias: 1 });
+  for (let k = 0; k < 2000 && !fired; k++) {
+    sh.update(DT, { stance, speed: 0, supp: 0, rest: null, wound: 1 });
+    sh.time += 0; // update가 시간을 진행
+    sh.tryFire(true);
+  }
+  if (!fired) return null;
+  const d = fired.dir;
+  const yaw = Math.atan2(d.x, -d.z);
+  const pitch = Math.asin(d.y) - holdFor(R);
+  return { yaw, pitch, dv: fired.speed - W762.muzzleVelocity, swayY: sh.aim.yaw * sh.swayMul, swayP: sh.aim.pitch * sh.swayMul };
+}
+
+function enemyRun(stance, skillSway, dispersionMoa, mvSD, dydvTab) {
+  const n = Math.max(500, Math.floor(N / 2));
+  const shots = [];
+  for (let i = 0; i < n; i++) {
+    const s = enemyShot(stance, 300, skillSway, dispersionMoa, mvSD);
+    if (s) shots.push(s);
+  }
+  const hits = E_RANGES.map((R, i) => {
+    let k = 0;
+    for (const s of shots) {
+      const x = s.yaw * R;
+      const y = s.pitch * R + s.dv * dydvTab[i];
+      if (Math.abs(x) <= TARGET.w / 2 && Math.abs(y) <= TARGET.h / 2) k++;
+    }
+    return k / shots.length;
+  });
+  const my = shots.reduce((a, s) => a + s.swayY, 0) / shots.length;
+  const mp = shots.reduce((a, s) => a + s.swayP, 0) / shots.length;
+  const rr = shots.map((s) => Math.hypot(s.swayY - my, s.swayP - mp) / MOA).sort((a, b) => a - b);
+  return { hits, d90: 2 * rr[Math.floor(rr.length * 0.9)] };
+}
+
+console.log('\n적 사수 — 게임 적 소총 코드(src/ai/Shooter.js), 같은 사람 흔들림 표 × 숙련도 배율, 완벽한 판단');
+console.log(`  같은 모델 확인: 적(숙련 1.0)에게 플레이어 총+탄 분산(${A.dispersionSigmaMoa} MOA)을 주면 플레이어 표와 같아야 한다`);
+console.log(`${'자세'.padEnd(10)} 흔들림 Ø90 플레이어/적   ${E_RANGES.map((r) => `${r} m`.padStart(6)).join('')}   (플레이어 → 적, 명중률)`);
+const eqChecks = [];
+const stanceRows = [
+  ['엎드려', 'prone', '엎드려'],
+  ['무릎', 'crouch', '무릎'],
+  ['서서', 'stand', '서서'],
+];
+for (const [label, st, key] of stanceRows) {
+  const pr = results[key];
+  const er = enemyRun(st, 1.0, A.dispersionSigmaMoa, A.muzzleVelocitySD, dydv);
+  eqChecks.push({ label, pr, er });
+  console.log(`${label.padEnd(10)} ${pr.d90.toFixed(1).padStart(5)} / ${er.d90.toFixed(1).padStart(5)} MOA     ${E_RANGES.map((_, i) => `${pct(pr.hits[i])}→${pct(er.hits[i]).trim()}`.padStart(12)).join('')}`);
+}
+console.log(`\n  적 소총(${A762.name}, 축별 ${A762.dispersionSigmaMoa} MOA) — 숙련도 배율별 명중률`);
+console.log(`${'자세'.padEnd(10)} ${'숙련(흔들림 배율)'.padEnd(14)} ${E_RANGES.map((r) => `${r} m`.padStart(6)).join('')}`);
+const skillRows = {};
+for (const [label, st] of stanceRows) {
+  for (const sk of [0.8, 1.0, 1.5]) {
+    const er = enemyRun(st, sk, A762.dispersionSigmaMoa, A762.muzzleVelocitySD, dydv762);
+    skillRows[`${label}${sk}`] = er;
+    console.log(`${label.padEnd(10)} ${('×' + sk.toFixed(1)).padEnd(14)} ${er.hits.map((h) => pct(h).padStart(6)).join('')}`);
+  }
+}
+
 // 판정(요청서 대략 목표, '안팎'을 넓게 봄)
 const i300 = RANGES.indexOf(300);
 const checks = [
@@ -146,6 +235,9 @@ const checks = [
   ['서서 300 m가 35 % 이하', results['서서'].hits[i300] <= 0.35],
   ['질주 직후 서서 300 m가 5~15 %', results['질주 직후 서서'].hits[i300] >= 0.05 && results['질주 직후 서서'].hits[i300] <= 0.15],
   ['자세 순서(거치 > 엎드려 > 무릎 > 서서 > 질주 직후)', RANGES.every((_, i) => CONDS.every((c, k) => k === 0 || results[CONDS[k - 1].name].hits[i] >= results[c.name].hits[i] - 0.02))],
+  ['적(숙련 1.0, 같은 분산) 흔들림 Ø90이 플레이어와 같음(±12 %)', eqChecks.every((q) => Math.abs(q.er.d90 / q.pr.d90 - 1) <= 0.12)],
+  ['적(숙련 1.0, 같은 분산) 명중률이 플레이어와 같음(±6 %p)', eqChecks.every((q) => q.pr.hits.every((h, i) => Math.abs(h - q.er.hits[i]) <= 0.06))],
+  ['적 명중률은 숙련도 순서(×0.8 ≥ ×1.0 ≥ ×1.5)', stanceRows.every(([l]) => E_RANGES.every((_, i) => skillRows[l + 0.8].hits[i] >= skillRows[l + 1].hits[i] - 0.03 && skillRows[l + 1].hits[i] >= skillRows[l + 1.5].hits[i] - 0.03))],
 ];
 console.log('');
 let ok = true;

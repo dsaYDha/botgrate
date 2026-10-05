@@ -220,6 +220,13 @@ export class AimModel {
 
     this.swayYaw = wy + tremor * ty + my + breath * 0.15 * Math.sin(ph * Math.PI * 2) + pulse * 0.25;
     this.swayPitch = wp + breath * (breathWave - 0.4) * 2 + pulse + tremor * tp + mp;
+    // 부상(팔): 흔들림 전체가 커진다
+    if (s.extraSway && s.extraSway !== 1) {
+      this.swayYaw *= s.extraSway;
+      this.swayPitch *= s.extraSway;
+      this.wanderMoa *= s.extraSway;
+      this.breathMoa *= s.extraSway;
+    }
 
     this.pitchSpring.update(dt);
     this.yawSpring.update(dt);

@@ -10,6 +10,7 @@ import { ThreatKnowledge } from '../ai/Knowledge.js';
 import { Senses } from '../ai/Senses.js';
 import { CoverMap } from '../ai/CoverMap.js';
 import { NavGrid } from '../ai/NavGrid.js';
+import { AILog } from '../ai/AILog.js';
 import { SCENARIO } from '../data/scenario.js';
 import { Random, rng } from '../core/Random.js';
 import { pointSegDistance } from '../physics/intersect.js';
@@ -41,6 +42,7 @@ export class EnemyManager {
     this.cover = new CoverMap(world);
     this.nav = new NavGrid(world);
     this.senses = new Senses(world, events, truth);
+    this.senses.log = new AILog();
     console.info(`[ai] cover points ${this.cover.points.length} (${this.cover.buildMs.toFixed(0)} ms), nav ${this.nav.N}² (${this.nav.buildMs.toFixed(0)} ms)`);
     this.ctx = {
       world,
@@ -180,7 +182,7 @@ export class EnemyManager {
     };
     e.knowledge = new ThreatKnowledge();
     e.brain = new Brain(e, this.ctx);
-    e.shooter = new Shooter(e, { bullets: this.bullets, events: this.events }, e.skill);
+    e.shooter = new Shooter(e, { bullets: this.bullets, events: this.events, time: () => this.time }, e.skill);
     this.senses.register(e);
     this.enemies.push(e);
     return e;
@@ -199,6 +201,7 @@ export class EnemyManager {
     this.nav.queue.length = 0;
     this.nav.active = null;
     this.senses.reset();
+    this.senses.log.clear();
     this.time = 0;
     this.ended = false;
     this.seed = (this.seed * 1103515245 + 12345) % 1e9;
@@ -217,7 +220,7 @@ export class EnemyManager {
     return out;
   }
 
-  /** 총구 앞 2.5 m가 단단한 물체(줄기·통나무·흙)에 막혔는가 — 엄폐물에 대고 쏘지 않게 */
+  /** 쏴도 되는가: 총구 앞 2.5 m가 단단한 물체(줄기·통나무·흙)에 막히지 않았고, 사선 위에 동료가 없다 */
   _muzzleClear(e, p) {
     if (e._mcT !== undefined && this.time - e._mcT < 0.25) return e._mcV;
     const m = e.muzzleWorld(this._mz || (this._mz = { x: 0, y: 0, z: 0 }));
@@ -227,9 +230,24 @@ export class EnemyManager {
     const l = Math.hypot(dx, dy, dz) || 1;
     const k = Math.min(2.5, l) / l;
     const T = this.senses.sight.transmission(m.x, m.y, m.z, m.x + dx * k, m.y + dy * k, m.z + dz * k, { skipLast: 0 });
+    let ok = T > 0;
+    // 사선 위 동료(가슴에서 1.3 m 안을 지나면 쏘지 않는다)
+    if (ok) {
+      for (const o of this.enemies) {
+        if (o === e || o.state === 'dead' || o.withdrawn) continue;
+        if (Math.abs(o.x - m.x) > l + 2 && Math.abs(o.z - m.z) > l + 2) continue;
+        const c = o.chestWorld;
+        const r = pointSegDistance(c.x, c.y, c.z, m.x, m.y, m.z, dx, dy, dz);
+        if (r.d < 1.3 && r.t > 0.01 && r.t < 1) {
+          ok = false;
+          e._friendInLane = o;
+          break;
+        }
+      }
+    }
     e._mcT = this.time;
-    e._mcV = T > 0;
-    return e._mcV;
+    e._mcV = ok;
+    return ok;
   }
 
   /** 탄이 적 옆을 지남: 초음속이면 '딱'(인지: 방향 혼동·딱-쾅 거리), 가까우면 제압 */

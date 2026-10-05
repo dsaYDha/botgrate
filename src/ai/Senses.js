@@ -197,12 +197,12 @@ export class Senses {
    * 관측 방위선이 눈대중 거리 ±30 % 안에서 숲띠(수관·덤불 지도)로 들어가면 그 가장자리(+2 m)로, 거리 오차는 6 m로.
    * @returns {{d:number, sRad:number}|null}
    */
-  _edgeRange(ex, ez, hx, hz, dEst) {
+  _edgeRange(ex, ez, hx, hz, dEst, span = 0.3) {
     const nav = this.nav;
     const c = this.world.canopy;
     if (!c) return null;
-    const lo = dEst * 0.7;
-    const hi = dEst * 1.3;
+    const lo = dEst * (1 - span);
+    const hi = dEst * (1 + span);
     let inside = this._dense(ex + hx * lo, ez + hz * lo);
     for (let s = lo; s <= hi; s += 2) {
       const now = this._dense(ex + hx * s, ez + hz * s);
@@ -273,16 +273,24 @@ export class Senses {
       a.cracks.delete(shotId);
     }
     bearing += rng.gauss() * sig;
-    const dEst = clamp(d * Math.exp(rng.gauss() * rangeSigma - (rangeSigma * rangeSigma) / 2), 15, 1200);
+    let dEst = clamp(d * Math.exp(rng.gauss() * rangeSigma - (rangeSigma * rangeSigma) / 2), 15, 1200);
     const ux = Math.sin(bearing);
     const uz = -Math.cos(bearing);
     const sLat = Math.max(4, dEst * Math.tan(Math.min(sig, 1.2)));
-    const sRad = Math.max(4, dEst * rangeSigma);
+    let sRad = Math.max(4, dEst * rangeSigma);
+    // 그 방향의 숲띠 가장자리(눈대중 거리 ±50 % 안)에서 쐈으리라 본다 — 지형지물에 기댄 짐작
+    const edge = this._edgeRange(a.pos.x, a.pos.z, ux, uz, dEst, 0.5);
+    if (edge) {
+      dEst = edge.d;
+      sRad = Math.min(sRad, 15);
+    }
     const ox = a.pos.x + ux * dEst;
     const oz = a.pos.z + uz * dEst;
+    // 소리만으로는 방위 오차가 약 8°(딱 소리에 헷갈렸으면 12°) 밑으로 줄지 않는다
+    const floor = dEst * Math.tan(((crack ? 12 : 8) * Math.PI) / 180);
     this._afterProcess(a, () => {
       K.threat = true;
-      K.observe(ox, oz, sLat, sRad, ux, uz, now, 'bang');
+      K.observe(ox, oz, sLat, sRad, ux, uz, now, 'bang', floor);
       a.onObservation?.('bang', { x: ox, z: oz, d: dEst });
       this._logKnowledge(a, 'bang');
     });
@@ -453,7 +461,14 @@ export class Senses {
     const dt = vis.lastEval < 0 ? 0.1 : Math.min(1.0, now - vis.lastEval);
     vis.lastEval = now;
     const tr = this.truth;
-    if (!tr.body.alive) return;
+    if (!tr.body.alive) {
+      // 쓰러지는 것을 본 적은 더 쏘지 않는다
+      if (a.knowledge.visible) {
+        a.knowledge.visible = false;
+        a.knowledge.downSeen = true;
+      }
+      return;
+    }
     const s = this._targetState();
     a.eye(this._eye || (this._eye = { x: 0, y: 0, z: 0 }));
     a.gaze(this._gz || (this._gz = { x: 0, y: 0, z: 0 }));
@@ -609,7 +624,10 @@ export class Senses {
     for (const a of this.agents) a.knowledge.grow(dt);
     // 시각: 갱신 주기가 지난 적 중 오래 기다린 순서로
     const tr = this.truth;
-    if (!tr.body.alive) return;
+    if (!tr.body.alive) {
+      for (const a of this.agents) if (a.knowledge.visible) this.evaluate(a);
+      return;
+    }
     const c = tr.body.center;
     let budget = this.budgetEvals;
     const due = [];

@@ -77,6 +77,8 @@ export class Shooter {
       velocityFps: W.muzzleVelocity / 0.3048,
     });
     holdTable();
+    this.dispersionMoa = A.dispersionSigmaMoa; // 시험에서 바꿔 볼 수 있게
+    this.mvSD = A.muzzleVelocitySD;
     this.reset();
   }
 
@@ -244,14 +246,19 @@ export class Shooter {
     yaw += this.aim.yaw * this.swayMul;
     pitch += this.aim.pitch * this.swayMul;
     // 총+탄 분산
-    const sd = A.dispersionSigmaMoa * MOA;
+    const sd = this.dispersionMoa * MOA;
     yaw += rng.gauss() * sd;
     pitch += rng.gauss() * sd;
     const cp = Math.cos(pitch);
     const dir = { x: Math.sin(yaw) * cp, y: Math.sin(pitch), z: -Math.cos(yaw) * cp };
-    const speed = W.muzzleVelocity + rng.gauss() * A.muzzleVelocitySD;
+    const speed = W.muzzleVelocity + rng.gauss() * this.mvSD;
     const b = this.ctx.bullets.fire({ origin: { x: m.x, y: m.y, z: m.z }, dir, speed, ammo: A, shooter: e.id, spinSg: this.sg, rightHandTwist: W.rightHandTwist });
     b.aimMode = t.mode;
+    // 디브리핑용: 쏠 때 이 적이 본 내 몸 비율, 알던 위치 오차, 안 지 얼마나
+    const K = e.knowledge;
+    b.exposure = e.vis ? e.vis.frac : 0;
+    b.knownErr = K ? K.err : null;
+    b.knownFor = K && K.firstAware >= 0 && this.ctx.time ? this.ctx.time() - K.firstAware : null;
     // 탄 소모
     if (this.mag > 0) this.mag--;
     else this.chambered = false;

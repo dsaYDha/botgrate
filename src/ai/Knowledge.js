@@ -76,7 +76,7 @@ export class ThreatKnowledge {
    * @param {number} ux 관측자 → 관측 위치 단위벡터
    * @param {number} uz
    */
-  observe(x, z, sLat, sRad, ux, uz, now, source) {
+  observe(x, z, sLat, sRad, ux, uz, now, source, floor = 0) {
     // 관측 공분산 R = U diag(rad², lat²) Uᵀ (U = [u, n])
     const r2 = sRad * sRad;
     const l2 = sLat * sLat;
@@ -123,8 +123,28 @@ export class ThreatKnowledge {
         }
       }
     }
+    // 같은 방향에서 거듭 들은 소리는 오차가 서로 묶여 있어(딱 소리 혼동·메아리) 무한히 줄지 않는다: 하한
+    if (floor > 0) {
+      const e = this.err;
+      if (e < 2 * floor) {
+        const k = (2 * floor) / Math.max(1e-3, e);
+        this.pxx *= k * k;
+        this.pxz *= k * k;
+        this.pzz *= k * k;
+      }
+    }
     this.lastObs = now;
     if (this.firstAware < 0) this.firstAware = now;
+  }
+
+  /** 남에게 들은 위치: 내 것보다 나을 때만 바꾼다(같은 정보를 되받아 오차가 줄어드는 일 없게 — 합치지 않음) */
+  adopt(x, z, sig, now, source) {
+    if (this.has && this.err <= 2 * sig) return false;
+    this._set(x, z, sig * sig, 0, sig * sig);
+    this.lastObs = now;
+    this.lastSource = source;
+    if (this.firstAware < 0) this.firstAware = now;
+    return true;
   }
 
   _set(x, z, pxx, pxz, pzz) {

@@ -208,6 +208,7 @@ export class WeaponSystem {
     let mul = 1;
     if (this.player.stance === 'prone') mul = R.proneMultiplier;
     else if (this.player.stance === 'crouch') mul = R.kneelMultiplier;
+    if (this.health) mul *= this.health.reloadMul; // 팔 부상: 아주 느림
     const def = R[kind];
     this._startAction(
       'reload',
@@ -296,7 +297,8 @@ export class WeaponSystem {
       this.adsWanted = inp.mouseHeld(2);
     }
     const obstructed = Math.abs(this.obs.pitch) > 0.035 || Math.abs(this.obs.yaw) > 0.035 || this.obs.retract > 0.06;
-    const canAds = !p.sprinting && !p.transition && !(this.action && this.action.type !== 'selector') && !obstructed && this.lowered < 0.3;
+    const hb = this.health && this.health.busy;
+    const canAds = !hb && !p.sprinting && !p.transition && !(this.action && this.action.type !== 'selector') && !obstructed && this.lowered < 0.3;
     const adsTarget = this.adsWanted && canAds ? 1 : 0;
     const adsRate = 1 / H.adsTime;
     this.ads = adsTarget > this.ads ? Math.min(1, this.ads + dt * adsRate) : Math.max(0, this.ads - dt * adsRate * 1.25);
@@ -306,7 +308,7 @@ export class WeaponSystem {
     this.aim.setHoldBreath(this.ads > 0.6 && inp.held(KEYS.sprint));
 
     // 질주 시 총 내림
-    const lowerTarget = p.sprinting || (p.transition && (p.transition.to === 'prone' || p.transition.from === 'prone')) ? 1 : 0;
+    const lowerTarget = hb || p.sprinting || (p.transition && (p.transition.to === 'prone' || p.transition.from === 'prone')) ? 1 : 0;
     if (lowerTarget > this.lowered) this.lowered = Math.min(1, this.lowered + dt / 0.28);
     else if (this.lowered > 0) {
       this.lowered = Math.max(0, this.lowered - dt / H.sprintToReady);
@@ -386,6 +388,7 @@ export class WeaponSystem {
       stamina: p.stamina,
       speed: p.speed,
       rest: this.rest && this.ads > 0.3 ? this.rest.kind : null,
+      extraSway: this.health ? this.health.swayMul : 1,
     });
     const [ry, rp] = this.aim.consumeResidual();
     p.yaw += ry;

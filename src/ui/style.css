@@ -68,6 +68,48 @@ body {
   pointer-events: none;
   white-space: pre;
 }
+/* 몸 상태(후처리를 쓰지 않는 품질에서만): 어두워짐 */
+#body-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.92) 70%, #000 100%);
+  opacity: 0;
+}
+/* 교전 종료·사망 뒤에만: 결과·디브리핑 */
+#endscreen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 7, 5, 0.72);
+  z-index: 12;
+}
+#endscreen .panel {
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 24px 28px;
+  background: rgba(20, 22, 17, 0.95);
+  border: 1px solid #3a3d31;
+  border-radius: 6px;
+}
+#endscreen h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+}
+#endscreen pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font: 14px/1.6 'Pretendard', 'Noto Sans KR', system-ui, sans-serif;
+  color: #d9d5c6;
+}
+#endscreen .hint {
+  margin: 16px 0 0;
+  color: #9a9585;
+  font-size: 13px;
+}
 .hidden {
   display: none !important;
 }

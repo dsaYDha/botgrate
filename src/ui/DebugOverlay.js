@@ -1,10 +1,15 @@
 // F3 디버그 오버레이(현실성 검증용, 평소 숨김): FPS, 위치·속도·자세, 현재 위치 풍속,
 // 조준(흔들림 MOA·탄 분산·총열 온도·거치), 조준점 아래 표적까지 실제 거리와 그 지점 풍속,
-// 총알 궤적 선, 명중 로그(부위, 거리, 착탄 속도, 운동에너지).
+// 총알 궤적 선, 명중 로그(부위, 거리, 착탄 속도, 운동에너지),
+// 적마다 인지 단계·추정 위치 오차(아는 오차 / 실제 오차)·제압·사기·행동, 'AI가 아는 위치 vs 실제' 기록 요약,
+// 3차원: 적이 아는 추정 위치와 오차 원(바닥의 고리).
+// F4: 적 시선(눈 → 내 몸, 초록 = 보임 / 빨강 = 막힘), 가시도 수치, 적 탄 궤적, 소리 사건('딱' 방출점 노랑, 적 총성 주황).
+// F6(F3이 켜져 있을 때): 디버그 전용 무적.
 // 게임 화면에는 거리 정보가 어디에도 없다 — 이 디버그 화면에서만 보인다.
 
 import * as THREE from 'three';
 import { WindField } from '../world/Wind.js';
+import { STAGE_NAMES } from '../ai/Knowledge.js';
 
 export class DebugOverlay {
   constructor(el, scene, events) {
@@ -18,6 +23,21 @@ export class DebugOverlay {
     scene.add(this.lines);
     this.lineObjs = new Map();
     this.lastText = 0;
+    this.aiVisible = false;
+    // 동적 선분(추정 원·시선·소리 사건)
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6 * 8000), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(6 * 8000), 3));
+    this.segs = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthTest: false }));
+    this.segs.frustumCulled = false;
+    this.segs.renderOrder = 999;
+    this.segs.visible = false;
+    scene.add(this.segs);
+    this.events = [];
+    events.on('bullet:flyby', (e) => this.events.push({ t: performance.now(), x: e.emit.x, y: e.emit.y, z: e.emit.z, c: [1, 0.9, 0.2], r: e.supersonic ? 0.6 : 0.3 }));
+    events.on('shot', (e) => {
+      if (e.shooter !== 'player') this.events.push({ t: performance.now(), x: e.position.x, y: e.position.y, z: e.position.z, c: [1, 0.5, 0.1], r: 0.8 });
+    });
     events.on('enemy:hit', (e) => {
       this.hits.unshift(
         `${e.enemy.id.padEnd(4)} ${e.partName.padEnd(10)} ${e.distance.toFixed(0).padStart(4)} m  ${e.speed.toFixed(0).padStart(4)} m/s  ${e.energy.toFixed(0).padStart(5)} J${e.through ? '  관통' : ''}`,
@@ -31,17 +51,28 @@ export class DebugOverlay {
     });
   }
 
+  /** F4: 적 시선·가시도·탄 궤적·소리 사건(3차원 표시) */
+  toggleAI() {
+    this.aiVisible = !this.aiVisible;
+    this.lines.visible = this.visible || this.aiVisible;
+  }
+
   toggle() {
     this.visible = !this.visible;
     this.el.classList.toggle('hidden', !this.visible);
-    this.lines.visible = this.visible;
+    this.lines.visible = this.visible || this.aiVisible;
   }
 
   update(dt, g) {
     this.fps += (1 / Math.max(dt, 1e-4) - this.fps) * Math.min(1, dt * 3);
     this.frameMs += (dt * 1000 - this.frameMs) * Math.min(1, dt * 3);
-    if (!this.visible) return;
+    if (!this.visible && !this.aiVisible) {
+      this.segs.visible = false;
+      return;
+    }
     this._lines(g.bullets);
+    this._ai3d(g);
+    if (!this.visible) return;
     const now = performance.now();
     if (now - this.lastText < 120) return;
     this.lastText = now;
@@ -70,8 +101,109 @@ export class DebugOverlay {
       ``,
       `명중 로그 (적  부위  거리  착탄속도  운동에너지)`,
       ...this.hits,
+      ``,
+      ...this._aiLines(g),
     ];
     this.el.textContent = lines.join('\n');
+  }
+
+  /** 적 인지·전술 상태(F3) */
+  _aiLines(g) {
+    const em = g.enemies;
+    const p = g.player;
+    const h = g.health;
+    const L = [];
+    const ws = h.wounds.map((w) => w.name + (w.tq ? '(지혈)' : '')).join(', ');
+    L.push(`몸: ${h.alive ? '생존' : '사망'}  혈액 ${(h.blood * 100).toFixed(0)} %  제압 ${h.supp.toFixed(2)}  부상 ${ws || '-'}${h.tq ? `  지혈대 ${(h.tq.t / h.tq.dur * 100).toFixed(0)} %` : ''}${h.godMode ? '  [무적]' : ''}`);
+    L.push(`적 부대(시드 ${em.seed}): ` + em.units.map((u) => `${u.name} ${u.phase} 사기 ${u.morale.toFixed(2)}${u.plan ? ' ' + u.plan.kind : ''}`).join(' | '));
+    L.push(`인지 평가 ${em.senses.stats.ms.toFixed(2)} ms/프레임  시선 광선 누적 ${em.senses.sight.stats.rays}  길찾기 ${em.nav.stats.solved}건(${em.nav.queue.length} 대기)`);
+    L.push(`적       역할  단계        아는 오차/실제   제압  행동                 탄       가시(D/P/몸)`);
+    for (const e of em.enemies) {
+      const K = e.knowledge;
+      const st = K.stage(em.time);
+      const actual = K.has ? Math.hypot(K.x - p.x, K.z - p.z) : null;
+      const kn = K.has ? `${K.err.toFixed(0).padStart(4)}/${actual.toFixed(0).padStart(4)} m` : '      -    ';
+      const role = { leader: '분대장', teamLeader: '조장', rifleman: '소총' }[e.role] || '';
+      const state = e.dead ? '사망' : e.state !== 'normal' ? (e.incapacitated ? '불능' : '부상') : e.withdrawn ? '철수' : '';
+      const v = e.vis;
+      L.push(`${e.id.padEnd(8)} ${role.padEnd(4)} ${(STAGE_NAMES[st] || st).padEnd(6)} ${kn}  ${e.supp.toFixed(2)}  ${(state || e.brain.status).padEnd(14)} ${String(e.shooter.rounds).padStart(2)}+${e.shooter.spare}  ${v ? `${v.D.toFixed(2)}/${v.P.toFixed(2)}/${(v.frac * 100).toFixed(0)}%` : ''}`);
+    }
+    const sum = em.senses.log.summary();
+    if (sum.length) {
+      L.push(`AI가 아는 위치 vs 실제(출처별: 건수, 실제 오차 평균 / 아는 오차 평균, 2σ 안 비율, 수상하게 정확)`);
+      for (const r of sum) L.push(`  ${r.source.padEnd(9)} ${String(r.n).padStart(5)}  ${r.actual.toFixed(1).padStart(6)} / ${r.err.toFixed(1).padStart(6)} m  ${(r.within * 100).toFixed(0).padStart(3)} %  ${(r.tiny * 100).toFixed(1)} %`);
+    }
+    return L;
+  }
+
+  /** 3차원 디버그 선: F3 추정 원, F4 시선·소리 사건 */
+  _ai3d(g) {
+    const pos = this.segs.geometry.attributes.position.array;
+    const col = this.segs.geometry.attributes.color.array;
+    let n = 0;
+    const cap = pos.length / 6;
+    const seg = (ax, ay, az, bx, by, bz, c) => {
+      if (n >= cap) return;
+      const i = n * 6;
+      pos[i] = ax;
+      pos[i + 1] = ay;
+      pos[i + 2] = az;
+      pos[i + 3] = bx;
+      pos[i + 4] = by;
+      pos[i + 5] = bz;
+      col[i] = col[i + 3] = c[0];
+      col[i + 1] = col[i + 4] = c[1];
+      col[i + 2] = col[i + 5] = c[2];
+      n++;
+    };
+    const T = g.world.terrain;
+    const em = g.enemies;
+    const stageCol = { unaware: [0.5, 0.5, 0.5], suspicious: [0.9, 0.9, 0.3], searching: [1, 0.6, 0.2], located: [1, 0.3, 0.2], engaging: [1, 0.1, 0.6] };
+    if (this.visible) {
+      for (const e of em.enemies) {
+        const K = e.knowledge;
+        if (!K.has || !e.canPerceive()) continue;
+        const r = Math.min(400, K.err);
+        const c = stageCol[K.stage(em.time)] || [1, 1, 1];
+        const N = 24;
+        for (let k = 0; k < N; k++) {
+          const a0 = (k / N) * Math.PI * 2;
+          const a1 = ((k + 1) / N) * Math.PI * 2;
+          const x0 = K.x + Math.cos(a0) * r;
+          const z0 = K.z + Math.sin(a0) * r;
+          const x1 = K.x + Math.cos(a1) * r;
+          const z1 = K.z + Math.sin(a1) * r;
+          seg(x0, T.heightAt(x0, z0) + 0.3, z0, x1, T.heightAt(x1, z1) + 0.3, z1, c);
+        }
+        const y = T.heightAt(K.x, K.z);
+        seg(K.x, y, K.z, K.x, y + 2.5, K.z, c);
+      }
+    }
+    if (this.aiVisible) {
+      const b = g.playerBody;
+      const eye = { x: 0, y: 0, z: 0 };
+      for (const e of em.enemies) {
+        if (!e.canPerceive() || !e.vis) continue;
+        if (Math.hypot(e.x - g.player.x, e.z - g.player.z) > 450) continue;
+        e.eye(eye);
+        const v = Math.max(...e.vis.T);
+        const c = e.knowledge.visible ? [0.2, 1, 0.3] : v > 0.05 ? [0.9, 0.8, 0.2] : [0.9, 0.2, 0.2];
+        seg(eye.x, eye.y, eye.z, b.center.x, b.center.y, b.center.z, c);
+      }
+      // 소리 사건(3 s)
+      const now = performance.now();
+      this.events = this.events.filter((q) => now - q.t < 3000);
+      for (const q of this.events) {
+        const r = q.r;
+        seg(q.x - r, q.y, q.z, q.x + r, q.y, q.z, q.c);
+        seg(q.x, q.y - r, q.z, q.x, q.y + r, q.z, q.c);
+        seg(q.x, q.y, q.z - r, q.x, q.y, q.z + r, q.c);
+      }
+    }
+    this.segs.geometry.setDrawRange(0, n * 2);
+    this.segs.geometry.attributes.position.needsUpdate = true;
+    this.segs.geometry.attributes.color.needsUpdate = true;
+    this.segs.visible = n > 0;
   }
 
   /** 조준점(화면 가운데) 아래 처음 닿는 물체까지 실제 거리와 그 지점 풍속(지면 위 1.2 m) */

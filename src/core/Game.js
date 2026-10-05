@@ -27,6 +27,7 @@ import { OpticOverlay } from '../weapon/OpticOverlay.js';
 import { BulletSystem } from '../physics/BulletSystem.js';
 import { EnemyManager } from '../enemies/EnemyManager.js';
 import { PlayerBody } from '../player/PlayerBody.js';
+import { PlayerHealth } from '../player/PlayerHealth.js';
 import { Effects } from '../effects/Effects.js';
 import { AudioEngine } from '../audio/AudioEngine.js';
 
@@ -130,6 +131,13 @@ export class Game {
     this.playerTarget = {
       onBulletHit: (info) => this.onPlayerHit(info),
     };
+    this.health = new PlayerHealth(this);
+    this.player.health = this.health;
+    this.weapon.health = this.health;
+    this.bodyOverlay = this.quality.post ? null : document.getElementById('body-overlay');
+    this.endscreen = document.getElementById('endscreen');
+    this._trackStats();
+    this.events.on('player:cannotStand', () => this.toast.show('다쳐서 일어설 수 없다 — 엎드려 기고 쏠 수만 있다'));
     this.debug = new DebugOverlay(document.getElementById('debug'), this.scene, this.events);
 
     // 바람
@@ -190,8 +198,14 @@ export class Game {
   reset() {
     this.player.reset();
     this.weapon.reset();
+    this.health.reset();
+    this.playerBody.alive = true;
     this.enemies.reset();
     this.bullets.bullets.length = 0;
+    this.stats = { start: -1, shots: 0, hits: 0, enemyShots: 0, end: -1 };
+    this.endscreen.classList.add('hidden');
+    this._endShown = false;
+    this._endAt = -1;
     if (this.settings.get('windMode') === 'random') this.world.wind.randomize(rng);
     this.toast.show('시나리오 초기화');
   }
@@ -230,7 +244,13 @@ export class Game {
     const inp = this.input;
     const [mdx, mdy] = inp.consumeMouse();
     if (inp.wasPressed(KEYS.debug)) this.debug.toggle();
+    if (inp.wasPressed(KEYS.debugAI)) this.debug.toggleAI();
     if (inp.wasPressed(KEYS.reset)) this.reset();
+    if (inp.wasPressed(KEYS.tourniquet)) this.health.toggleTourniquet();
+    if (inp.wasPressed(KEYS.god) && this.debug.visible) {
+      this.health.godMode = !this.health.godMode;
+      this.toast.show(`디버그 무적: ${this.health.godMode ? '켜짐' : '꺼짐'}`);
+    }
 
     // 플레이어·무기
     this.player.update(dt, { ads: this.weapon.ads, adsHeld: this.weapon.adsWanted, lookDX: mdx, lookDY: mdy, zoom: this.zoom });
@@ -293,6 +313,17 @@ export class Game {
       this.restMark.classList.toggle('hidden', !restOn);
     }
 
+    // 몸 상태(부상·출혈·제압)
+    this.health.update(dt);
+    // 맞거나 탄이 스칠 때 짧은 움찔(카메라)
+    if (Math.abs(this.health.flinchP) + Math.abs(this.health.flinchY) > 1e-5) {
+      const fq = this._fq || (this._fq = new THREE.Quaternion());
+      fq.setFromEuler(new THREE.Euler(this.health.flinchP, this.health.flinchY, 0, 'YXZ'));
+      cam.quaternion.multiply(fq);
+      cam.updateMatrixWorld();
+      this.weaponCamera.quaternion.copy(cam.quaternion);
+      this.weaponCamera.updateMatrixWorld();
+    }
     // 세계
     this.enemies.update(dt);
     this.bullets.update(dt, this.time);
@@ -308,6 +339,10 @@ export class Game {
     // 소리
     this.audio.update(dt, cam.position, cam.quaternion, this.time);
     this._breathing();
+    // 심장 박동: 피를 잃었거나 몹시 긴장했을 때만 들린다
+    const h = this.health;
+    const hbI = h.alive ? Math.max((1 - h.blood) / 0.4, h.supp - 0.35, (this.player.heart - 145) / 40, h.lungTimer >= 0 ? 0.8 : 0) : 0;
+    this.audio.heartbeatTick(dt, this.player.heart, hbI);
 
     // 조준경: 눈이 광축에서 벗어난 정도(아이박스 대비) → 가장자리 그림자·좁아지는 시야
     const kick = this.weapon.aim.modelKick;
@@ -320,13 +355,53 @@ export class Game {
       eyeX: this.weapon.aim.eyeOff.x / eyeBox + this.weapon.obs.yaw * 20,
       eyeY: this.weapon.aim.eyeOff.y / eyeBox - kick * 25,
     });
+    this._checkEnd();
     inp.endFrame();
+  }
+
+  /** 교전 통계(결과 화면용 — 게임 중에는 보이지 않는다) */
+  _trackStats() {
+    this.stats = { start: -1, shots: 0, hits: 0, enemyShots: 0, end: -1 };
+    this.events.on('shot', (e) => {
+      if (this.stats.start < 0) this.stats.start = this.time;
+      if (e.shooter === 'player') this.stats.shots++;
+      else this.stats.enemyShots++;
+    });
+    this.events.on('bullet:impact', (e) => {
+      if (e.kind === 'body' && e.shooter === 'player' && e.target && e.target.id) this.stats.hits++;
+    });
+    this.events.on('engagement:end', () => {
+      if (this._endAt < 0) this._endAt = this.time + 4;
+    });
+    this.events.on('player:dead', () => {
+      if (this._endAt < 0) this._endAt = this.time + 3;
+    });
+    this._endAt = -1;
+  }
+
+  _checkEnd() {
+    if (this._endShown || this._endAt < 0 || this.time < this._endAt) return;
+    this._endShown = true;
+    const st = this.stats;
+    const h = this.health;
+    const c = this.enemies.counts || { down: 0, withdrawn: 0, total: 0 };
+    const dur = st.start >= 0 ? this.time - st.start : 0;
+    const mmss = (t) => `${Math.floor(t / 60)}분 ${Math.floor(t % 60)}초`;
+    const lines = [];
+    if (!h.alive) lines.push(...h.debrief(), '');
+    lines.push(`교전 시간 ${mmss(dur)}`);
+    lines.push(`발사 ${st.shots}발, 적에게 명중 ${st.hits}발${st.shots ? ` (${Math.round((st.hits / st.shots) * 100)} %)` : ''}`);
+    lines.push(`무력화한 적 ${c.down}명 / 철수한 적 ${c.withdrawn}명 / 전체 ${c.total}명`);
+    const ws = h.wounds.map((w) => `${w.name}${w.tq ? '(지혈대)' : ''}`);
+    lines.push(`플레이어: ${!h.alive ? '사망' : ws.length ? `부상 — ${ws.join(', ')}` : '다치지 않음'}`);
+    document.getElementById('end-title').textContent = !h.alive ? '전사' : '교전 종료';
+    document.getElementById('end-text').textContent = lines.join('\n');
+    this.endscreen.classList.remove('hidden');
   }
 
   /** 플레이어 피격(부상 모델은 PlayerHealth) */
   onPlayerHit(info) {
     if (this.health) this.health.onHit(info);
-    else console.info(`[hit] player ${info.part} from ${info.shooter} ${info.distance.toFixed(0)} m ${info.speed.toFixed(0)} m/s`);
   }
 
   _breathing() {

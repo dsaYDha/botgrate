@@ -78,6 +78,11 @@ export class Player {
 
   setStance(target) {
     if (this.transition || target === this.stance) return;
+    if (this.health && this.health.forcedProne && target !== 'prone') {
+      this.events.emit('player:cannotStand', {});
+      return;
+    }
+    if (this.health && !this.health.alive) return;
     const key = `${this.stance}>${target}`;
     const dur = MOVEMENT.stanceTimes[key];
     if (!dur) return;
@@ -145,7 +150,12 @@ export class Player {
     if (inp.held(KEYS.back)) fz += 1;
     if (inp.held(KEYS.left)) fx -= 1;
     if (inp.held(KEYS.right)) fx += 1;
-    const moving = fx !== 0 || fz !== 0;
+    let moving = fx !== 0 || fz !== 0;
+    // 지혈대를 감는 중·쓰러짐: 움직이지 못함
+    if (this.health && (this.health.tq || !this.health.alive)) {
+      moving = false;
+      fx = fz = 0;
+    }
     const len = Math.hypot(fx, fz) || 1;
     fx /= len;
     fz /= len;
@@ -170,7 +180,7 @@ export class Player {
     if (!wantSprint || !moving || this.stamina <= 0) this.sprinting = false;
 
     let base;
-    if (this.stance === 'prone') base = MOVEMENT.speeds.prone;
+    if (this.stance === 'prone') base = MOVEMENT.speeds.prone * (this.health && this.health.forcedProne ? 0.6 : 1);
     else if (this.stance === 'crouch') base = MOVEMENT.speeds.crouch;
     else if (this.sprinting) base = MOVEMENT.speeds.sprint;
     else if (this.walkMode || ctx.ads > 0.3) base = MOVEMENT.speeds.walk;

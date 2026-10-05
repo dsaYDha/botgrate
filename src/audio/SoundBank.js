@@ -27,14 +27,114 @@ function gunshot(variant) {
   return fade(out, 0.0, 0.05);
 }
 
-function crack() {
-  setSeed(42);
-  const out = buf(0.25);
-  const n = Math.floor(0.0005 * SR);
+/**
+ * 초음속 탄 충격파('딱'): N파(지속 시간은 스친 거리의 1/4제곱에 비례 — Whitham) + 귀·주변이 만드는 밝은 꼬리.
+ * near: 1 m 안(아주 짧고 날카로움), mid: 3~10 m, far: 10~40 m(덜 날카롭고 낮게)
+ */
+function crack(kind) {
+  setSeed(42 + kind.length * 7);
+  const out = buf(0.3);
+  const T = kind === 'near' ? 0.00028 : kind === 'mid' ? 0.0004 : 0.0006;
+  const n = Math.max(3, Math.floor(T * SR));
   for (let i = 0; i < n; i++) out[i] += 1 - (2 * i) / n;
-  addNoiseBurst(out, 0, 0.0001, 0.004, 0.5, [['highpass', 1500]]);
-  addNoiseBurst(out, 0.003, 0.002, 0.04, 0.12, [['bandpass', 2500, 0.8]]);
+  addNoiseBurst(out, 0, 0.0001, kind === 'near' ? 0.003 : 0.005, kind === 'far' ? 0.25 : 0.5, [['highpass', kind === 'far' ? 900 : 1600]]);
+  addNoiseBurst(out, 0.002, 0.002, 0.035, kind === 'near' ? 0.18 : 0.12, [['bandpass', 2400, 0.8]]);
+  if (kind === 'far') biquad(out, 'lowpass', 6000, 0.7);
+  return normalize(out, 0.92);
+}
+
+/** 아음속 탄이 스치는 소리('휙'): 높은 바람 소리가 지나가며 낮아짐 */
+function whiz() {
+  setSeed(77);
+  const out = buf(0.35);
+  const N = out.length;
+  for (let i = 0; i < N; i++) {
+    const t = i / N;
+    const env = Math.exp(-((t - 0.35) ** 2) / 0.02);
+    out[i] = noise() * env;
+  }
+  // 앞쪽은 높게, 뒤쪽은 낮게(지나가며 음높이가 내려감)
+  const a = out.subarray(0, Math.floor(N * 0.4));
+  const b = out.subarray(Math.floor(N * 0.4));
+  biquad(a, 'bandpass', 3600, 2.2);
+  biquad(b, 'bandpass', 2200, 2.2);
+  return normalize(out, 0.7);
+}
+
+/**
+ * 사람 외침(외부 음성 파일 없이): 성대 펄스열(음높이 흔들림) → 모음 포먼트 3개 → 음절마다 파열음 잡음.
+ * 알아듣는 말이 아니라 짧고 굵은 사람 소리. kind: contact(2~3음절, 크고 높게), reloading, casualty(높게), suspicious(낮고 작게)
+ */
+function shout(kind, variant) {
+  setSeed(9000 + variant * 31 + kind.length * 101);
+  const sylls = { contact: [['o', 0.16], ['a', 0.24]], reloading: [['e', 0.12], ['a', 0.14], ['o', 0.2]], casualty: [['a', 0.18], ['i', 0.22]], suspicious: [['e', 0.12], ['o', 0.16]] }[kind];
+  const F = { a: [760, 1250, 2550], o: [520, 880, 2450], e: [500, 1750, 2500], i: [320, 2100, 2900] };
+  const f0base = (kind === 'casualty' ? 205 : kind === 'suspicious' ? 120 : 175) * (0.92 + ((variant * 0.37) % 0.2));
+  const gap = 0.05;
+  const total = sylls.reduce((a, q) => a + q[1] + gap, 0.08);
+  const out = buf(total + 0.1);
+  let t0 = 0.03;
+  for (let k = 0; k < sylls.length; k++) {
+    const [v, dur] = sylls[k];
+    const n = Math.floor(dur * SR);
+    const src = new Float32Array(n);
+    let ph = 0;
+    for (let i = 0; i < n; i++) {
+      const u = i / n;
+      // 음높이: 외침은 올라갔다 떨어짐, 약간의 떨림
+      const f0 = f0base * (1 + 0.18 * Math.sin(Math.PI * u) - 0.1 * u + 0.01 * noise());
+      ph += f0 / SR;
+      ph -= Math.floor(ph);
+      const g = ph < 0.6 ? Math.sin((Math.PI * ph) / 0.6) ** 2 : 0; // 성대 펄스
+      const env = Math.min(1, u / 0.12) * Math.min(1, (1 - u) / 0.25);
+      src[i] = (g - 0.3) * env + noise() * 0.04 * env;
+    }
+    // 포먼트(병렬 대역 통과)
+    const f = F[v];
+    const s1 = Float32Array.from(src);
+    const s2 = Float32Array.from(src);
+    const s3 = Float32Array.from(src);
+    biquad(s1, 'bandpass', f[0], 5);
+    biquad(s2, 'bandpass', f[1], 7);
+    biquad(s3, 'bandpass', f[2], 9);
+    const s0 = Math.floor(t0 * SR);
+    for (let i = 0; i < n && s0 + i < out.length; i++) out[s0 + i] += s1[i] * 1.0 + s2[i] * 0.7 + s3[i] * 0.35;
+    // 음절 앞 파열음
+    if (k > 0 || kind !== 'suspicious') addNoiseBurst(out, Math.max(0, t0 - 0.012), 0.001, 0.008, 0.25, [['bandpass', 3000, 1.2]]);
+    t0 += dur + gap;
+  }
+  softClip(out, kind === 'suspicious' ? 1.2 : 2.2);
+  return normalize(out, kind === 'suspicious' ? 0.5 : 0.9);
+}
+
+/** 심장 박동(쿵-쿵): 다쳤거나 몹시 긴장했을 때 */
+function heartbeat() {
+  setSeed(9500);
+  const out = buf(0.5);
+  addTone(out, 0.0, 52, 0.05, 0.9, 38);
+  addNoiseBurst(out, 0.0, 0.004, 0.03, 0.25, [['lowpass', 120]]);
+  addTone(out, 0.17, 60, 0.04, 0.6, 44);
+  addNoiseBurst(out, 0.17, 0.004, 0.025, 0.18, [['lowpass', 120]]);
   return normalize(out, 0.9);
+}
+
+/** 지혈대: 찍찍이 뜯기·감는 막대(윈들러스) 딸깍 */
+function tqSound(type) {
+  setSeed(9600 + type.length);
+  const out = buf(type === 'rip' ? 0.6 : 0.25);
+  if (type === 'rip') {
+    const n = Math.floor(0.45 * SR);
+    for (let i = 0; i < n; i++) {
+      const t = i / SR;
+      const am = 0.5 + 0.5 * Math.sign(Math.sin(t * 2 * Math.PI * (70 + 50 * Math.sin(t * 14))));
+      out[i + Math.floor(0.02 * SR)] += noise() * am * Math.exp(-t / 0.3) * 0.6;
+    }
+    biquad(out, 'bandpass', 2300, 0.6);
+  } else {
+    addMetal(out, 0.0, 0.25, [1900, 3100], 0.006);
+    addNoiseBurst(out, 0.0, 0.002, 0.03, 0.4, [['bandpass', 900, 0.8]]);
+  }
+  return normalize(out, 0.7);
 }
 
 function metalClip(type, variant) {
@@ -337,7 +437,11 @@ export function buildSoundBank(ctx) {
   };
   const bank = {
     gunshot: [0, 1, 2, 3].map((v) => make(gunshot(v))),
-    crack: [make(crack())],
+    crack: { near: make(crack('near')), mid: make(crack('mid')), far: make(crack('far')) },
+    whiz: make(whiz()),
+    shout: {},
+    heartbeat: make(heartbeat()),
+    tq: { rip: make(tqSound('rip')), click: make(tqSound('click')) },
     casingHard: [0, 1, 2].map((v) => make(casing(true, v))),
     casingSoft: [0, 1, 2].map((v) => make(casing(false, v))),
     impact: {},
@@ -350,6 +454,7 @@ export function buildSoundBank(ctx) {
     mech: {},
   };
   for (const t of ['dirt', 'wood', 'leaves', 'body', 'ricochet', 'fall', 'rifleDrop']) bank.impact[t] = [0, 1, 2].map((v) => make(impact(t, v)));
+  for (const k of ['contact', 'reloading', 'casualty', 'suspicious']) bank.shout[k] = [0, 1, 2].map((v) => make(shout(k, v)));
   for (const s of ['stubble', 'plowed', 'weeds', 'leaves', 'dirt', 'grass']) bank.step[s] = [0, 1, 2].map((v) => make(footstep(s, v)));
   for (const m of ['magRelease', 'magOut', 'magIn', 'magSeat', 'boltRelease', 'selector', 'dryFire', 'magCheckOut', 'pouch', 'pouchGrab', 'pouchEmpty'])
     bank.mech[m] = [0, 1].map((v) => make(metalClip(m, v)));

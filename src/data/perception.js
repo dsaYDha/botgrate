@@ -65,7 +65,7 @@ export const HEARING = {
   bangBearingSigmaDeg: 22,
   forestBearingMul: 1.35, // 듣는 사람이 숲띠 안이면 잔향 때문에
   crackConfusionMul: 1.5, // '딱'을 먼저 들으면 방향이 헷갈린다
-  crackBiasWeight: [0.2, 0.5], // 쾅 방향이 딱 방향으로 끌려가는 정도
+  crackBiasWeight: [0.15, 0.4], // 쾅 방향이 딱 방향으로 끌려가는 정도
   // 거리 추정(로그정규 표준편차): 딱-쾅 시간차를 들으면 ±30 %, 소리 크기만으로는 ±50 %
   rangeSigmaCrackBang: 0.3,
   rangeSigmaLoudness: 0.5,

@@ -149,12 +149,9 @@ export class Unit {
     const ex = info.x + rng.gauss() * extraSig;
     const ez = info.z + rng.gauss() * extraSig;
     const sig = Math.max(3, errR / 2);
-    const ux = ex - m.x;
-    const uz = ez - m.z;
-    const l = Math.hypot(ux, uz) || 1;
     K.threat = K.threat || kind !== 'suspicious';
     K.suspicion = Math.max(K.suspicion, 0.6);
-    K.observe(ex, ez, sig, sig, ux / l, uz / l, this.time(), source);
+    K.adopt(ex, ez, sig, this.time(), source);
     m.brain?.onShared(source);
   }
 
